@@ -33,9 +33,9 @@ the number `1010100000100`, or 5,380.
 All protocol messages start with a 16-bit peer ID. Whether this refers to the
 receiver or sender depends on the context: in client-to-server communication,
 it refers to the receiver; in server-to-client communication, it refers to the
-sender; in client-to-client communication, it refers to the sender. The value 0
-is reserved to mean "all peers", "all relevant peers", or "the server",
-depending on context.
+sender; in client-to-client communication, it refers to the sender. The maximum
+integer value is reserved to mean "all peers", "all relevant peers", or "the
+server", depending on context.
 
 After the peer ID is a 16-bit command, and after that is the command payload,
 the format of which varies based on the command. The command IDs and payloads

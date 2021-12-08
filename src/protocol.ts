@@ -25,6 +25,7 @@ export const protocol = {
         // Basic negotiation
         login: 0x10,
         formats: 0x11,
+        rtc: 0x12,
 
         // Peer and stream info
         peer: 0x20,
@@ -41,6 +42,11 @@ export const protocol = {
         },
 
         formats: {
+            length: 4, // + the actual data
+            data: 4
+        },
+
+        rtc: {
             length: 4, // + the actual data
             data: 4
         },

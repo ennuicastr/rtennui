@@ -42,6 +42,7 @@ export class Connection extends events.EventEmitter {
         this._audioTracks = [];
         this._serverReliable = null;
         this._serverUnreliable = null;
+        this._serverUnreliablePC = null;
         this._p2p = [];
     }
 
@@ -174,12 +175,126 @@ export class Connection extends events.EventEmitter {
         });
 
         conn.addEventListener("close", ev => {
+            this._serverReliable = this._serverUnreliable =
+                this._serverUnreliablePC = null;
             this.emitEvent("disconnected", ev);
         });
 
         this.emitEvent("connected", null);
 
+        this.connectUnreliable();
+
         return true;
+    }
+
+    /**
+     * Establish an unreliable connection to the server.
+     */
+    async connectUnreliable() {
+        let pc: RTCPeerConnection = this._serverUnreliablePC;
+        if (!pc) {
+            pc = this._serverUnreliablePC = new RTCPeerConnection({
+                iceServers: util.iceServers
+            });
+
+            // Perfect negotiation logic (we're always polite)
+            pc.onnegotiationneeded = async () => {
+                try {
+                    await pc.setLocalDescription();
+
+                    const descrS = JSON.stringify({
+                        description: pc.localDescription
+                    });
+                    const descrU8 = util.encodeText(descrS);
+                    const p = prot.parts.rtc;
+                    const msg = new DataView(new ArrayBuffer(
+                        p.length + descrU8.length));
+                    msg.setUint16(0, -1, true);
+                    msg.setUint16(2, prot.ids.rtc, true);
+                    (new Uint8Array(msg.buffer)).set(
+                        descrU8, p.data);
+                    this._serverReliable.send(msg.buffer);
+
+                } catch (ex) {
+                    console.error(ex);
+
+                }
+            };
+
+            pc.onicecandidate = ev => {
+                const candS = JSON.stringify({
+                    candidate: ev.candidate
+                });
+                const candU8 = util.encodeText(candS);
+                const p = prot.parts.rtc;
+                const msg = new DataView(new ArrayBuffer(
+                    p.length + candU8.length));
+                msg.setUint16(0, -1, true);
+                msg.setUint16(2, prot.ids.rtc, true);
+                (new Uint8Array(msg.buffer)).set(
+                    candU8, p.data);
+                this._serverReliable.send(msg.buffer);
+            };
+        }
+
+        // Set up the actual data channel
+        const dc = pc.createDataChannel("unreliable", {
+            ordered: false,
+            maxRetransmits: 0
+        });
+        dc.binaryType = "arraybuffer";
+
+        dc.addEventListener("open", () => {
+            this._serverUnreliable = dc;
+        }, {once: true});
+
+        dc.addEventListener("close", () => {
+            if (this._serverUnreliable === dc)
+                this._serverUnreliable = null;
+        }, {once: true});
+
+        dc.onmessage = ev => {
+            this.serverMessage(ev);
+        };
+    }
+
+    /**
+     * Handler for RTC messages from the server.
+     */
+    private async serverRTCMessage(msg: DataView) {
+        const pc = this._serverUnreliablePC;
+        const p = prot.parts.rtc;
+        const dataU8 = (new Uint8Array(msg.buffer)).subarray(p.data);
+        const dataS = util.decodeText(dataU8);
+        const data = JSON.parse(dataS);
+
+        // Perfect negotiation (we're polite)
+        try {
+            if (data.description) {
+                await pc.setRemoteDescription(data.description);
+                if (data.description.type === "offer") {
+                    await pc.setLocalDescription();
+                    const descrS = JSON.stringify({
+                        description: pc.localDescription
+                    });
+                    const descrU8 = util.encodeText(descrS);
+                    const msg = new DataView(new ArrayBuffer(
+                        p.length + descrU8.length));
+                    msg.setUint16(0, -1, true);
+                    msg.setUint16(2, prot.ids.rtc, true);
+                    (new Uint8Array(msg.buffer)).set(descrU8, p.data);
+                    this._serverReliable.send(msg.buffer);
+                }
+
+            } else if (data.candidate) {
+                await pc.addIceCandidate(data.candidate);
+
+            }
+
+        } catch (ex) {
+            console.error(ex);
+
+        }
     }
 
     /**
@@ -204,6 +319,15 @@ export class Connection extends events.EventEmitter {
                 this._formats = JSON.parse(formatsJSON);
                 break;
             }
+
+            case prot.ids.rtc:
+                if (peerId === 65535 /* max u16 */) {
+                    // Server
+                    this.serverRTCMessage(msg);
+                } else {
+                    // Client (FIXME)
+                }
+                break;
 
             case prot.ids.peer:
             {
@@ -281,8 +405,10 @@ export class Connection extends events.EventEmitter {
      * @param reliable  Whether to send it over the reliable connection
      */
     private _send(buf: ArrayBuffer, reliable: boolean) {
-        // FIXME
-        this._serverReliable.send(buf);
+        if (!reliable && this._serverUnreliable)
+            this._serverUnreliable.send(buf);
+        else if (this._serverReliable)
+            this._serverReliable.send(buf);
     }
 
     /**
@@ -386,6 +512,11 @@ export class Connection extends events.EventEmitter {
      * Unreliable connection to the server.
      */
     private _serverUnreliable: RTCDataChannel;
+
+    /**
+     * The peer connection corresponding to _serverUnreliable.
+     */
+    private _serverUnreliablePC: RTCPeerConnection;
 
     /**
      * Peers.
