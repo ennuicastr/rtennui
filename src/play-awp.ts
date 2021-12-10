@@ -47,24 +47,54 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     done: boolean;
 
     buf: Float32Array[][];
+    bufLen: number;
 
     constructor(options?: AudioWorkletNodeOptions) {
         super(options);
+
+        const sampleRate = options.parameterData.sampleRate;
+
+        // Skip data if our buffer goes over 20ms
+        const idealBuf = Math.round(sampleRate / 100);
+        const maxBuf = Math.round(sampleRate / 50);
 
         this.connected = false;
         this.playing = false;
         this.timeout = 0;
         this.done = false;
         this.buf = [];
+        this.bufLen = 0;
 
         this.port.onmessage = ev => {
             const msg = ev.data;
             if (msg.length) {
                 if (this.connected) {
+                    // Check for overrun
+                    if (this.bufLen > maxBuf) {
+                        while (this.bufLen > idealBuf) {
+                            // Skip some data
+                            const rem = this.bufLen - idealBuf;
+                            const part = this.buf[0];
+                            const partLen = part[0].length;
+                            if (partLen > rem) {
+                                // Just remove part
+                                for (let i = 0; i < part.length; i++)
+                                    part[i] = part[i].subarray(rem);
+                                this.bufLen -= rem;
+                            } else {
+                                // Remove this whole part
+                                this.buf.shift();
+                                this.bufLen -= partLen;
+                            }
+                        }
+                    }
+
+                    // Now accept this part
                     this.buf.push(msg);
+                    this.bufLen += msg[0].length;
                     if (!this.playing && this.buf.length === 1) {
                         this.playing = true;
-                        this.timeout = /* FIXME */ 480;
+                        this.timeout = idealBuf;
                     }
                 }
 
@@ -110,6 +140,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                     part[i] = part[i].subarray(rem);
                 idx = len;
                 rem = 0;
+                this.bufLen -= len;
 
             } else {
                 // Use the rest of it
@@ -119,6 +150,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                 idx += partLen;
                 rem -= partLen;
                 this.buf.shift();
+                this.bufLen -= partLen;
 
             }
         }

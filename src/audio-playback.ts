@@ -73,7 +73,11 @@ export class AudioPlaybackAWP extends AudioPlayback {
 
         // Create the worklet...
         const worklet = this._worklet =
-            new AudioWorkletNode(ac, "rtennui-play");
+            new AudioWorkletNode(ac, "rtennui-play", {
+                parameterData: {
+                    sampleRate: ac.sampleRate
+                }
+            });
 
         // Connect it up
         const input = this._input = ac.createConstantSource();
