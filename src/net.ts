@@ -349,6 +349,12 @@ export class Connection extends events.EventEmitter {
                 if (status)
                     this._p2p[peerId] = new peer.Peer(this, peerId);
 
+                // Or destroy the old one
+                else if (this._p2p[peerId]) {
+                    this._p2p[peerId].close();
+                    this._p2p[peerId] = null;
+                }
+
                 // And tell the user
                 this.emitEvent(
                     status ? "peer-joined" : "peer-left",
