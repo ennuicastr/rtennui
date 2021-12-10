@@ -14,523 +14,64 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-import * as audioCapture from "./audio-capture";
-import * as events from "./events";
-import * as outgoingAudioStream from "./outgoing-audio-stream";
-import * as peer from "./peer";
-import {protocol as prot} from "./protocol";
 import * as util from "./util";
 
-import type * as wcp from "libavjs-webcodecs-polyfill";
-declare let LibAVWebCodecs: typeof wcp;
-
-// Supported en/decoders
-let encoders: string[] = null;
-let decoders: string[] = null;
+/**
+ * A description of a number entry.
+ */
+export type NumberDescr = [number, number, number];
 
 /**
- * An RTEnnui connection, including all requisite server and peer connections.
- * Everything to do with the outgoing stream is also implemented here, because
- * there's only one outgoing stream (with any number of tracks) per connection.
+ * A description of a raw entry.
  */
-export class Connection extends events.EventEmitter {
-    constructor(
-        private _ac: AudioContext
-    ) {
-        super();
-        this._streamId = 0;
-        this._audioTracks = [];
-        this._serverReliable = null;
-        this._serverUnreliable = null;
-        this._serverUnreliablePC = null;
-        this._p2p = [];
-    }
+export type RawDescr = [number, Uint8Array];
 
-    /**
-     * Connect to the RTEnnui server. Returns true if the connection was
-     * successful. Do not use if this Connection is already connected or has
-     * otherwise been used; make a new one.
-     * @param url  Server address
-     * @param credentials  Login credentials
-     */
-    async connect(url: string, credentials: any): Promise<boolean> {
-        if (url.indexOf("://") < 0) {
-            // Figure out the WebSocket URL relative to the current URL
-            const u = new URL(document.location.href);
-            u.protocol = "ws" + (u.protocol === "https:" ? "s" : "") + ":";
-            if (url[0] === "/")
-                u.pathname = url;
-            else
-                u.pathname = u.pathname.replace(/\/[^\/]*$/, "/" + url);
-            url = u.href;
-        }
+/**
+ * A description is either.
+ */
+export type Descr = NumberDescr | RawDescr;
 
-        // Perhaps take this time to figure out what en/decoders we support
-        if (!encoders) {
-            let enc = [];
-            let dec = [];
+/**
+ * Create an ArrayBuffer based on a description.
+ */
+export function createPacket(
+    len: number, peer: number, cmd: number, descr: Descr[]
+) {
+    const retAB = new ArrayBuffer(len);
+    const ret = new DataView(retAB);
+    const retU8 = new Uint8Array(retAB);
 
-            for (const codec of ["vp09", "vp8"]) {
-                try {
-                    await LibAVWebCodecs.getVideoDecoder({codec});
-                    dec.push("v" + codec);
-                    await LibAVWebCodecs.getVideoEncoder({
-                        codec,
-                        width: 640, height: 480
-                    });
-                    enc.push("v" + codec);
-                } catch (ex) {}
-            }
+    ret.setUint16(0, peer, true);
+    ret.setUint16(2, cmd, true);
 
-            // H.263+ is special because it's not in the codec registry
-            try {
-                await LibAVWebCodecs.getVideoDecoder({
-                    codec: {libavjs:{
-                        codec: "h263p"
-                    }}
-                });
-                dec.push("vh263p");
-                await LibAVWebCodecs.getVideoEncoder({
-                    codec: {libavjs:{
-                        codec: "h263p",
-                        ctx: {
-                            pix_fmt: 0,
-                            width: 640,
-                            height: 480
-                        }
-                    }},
-                    width: 640,
-                    height: 480
-                });
-                enc.push("vh263p");
-            } catch (ex) {}
-
-            /* We don't use native WebCodecs for audio, so our support is
-             * always the same */
-            enc.push("aopus");
-            dec.push("aopus");
-
-            if (!encoders)
-                encoders = enc;
-            if (!decoders)
-                decoders = dec;
-        }
-
-        const conn = this._serverReliable = new WebSocket(url);
-        conn.binaryType = "arraybuffer";
-
-        // Wait for it to open
-        const opened = await new Promise(res => {
-            conn.addEventListener("open", ev => {
-                res(true);
-            }, {once: true});
-            conn.addEventListener("close", ev => {
-                res(false);
-            }, {once: true});
-        });
-        if (!opened)
-            return false;
-
-        // Send our credentials and await a login ack
-        const p = prot.parts.login;
-        const loginObj = {
-            credentials,
-            transmit: encoders,
-            receive: decoders
-        };
-        const loginU8 = util.encodeText(JSON.stringify(loginObj));
-        const login = new DataView(new ArrayBuffer(p.length + loginU8.length));
-        login.setUint16(0, 0, true);
-        login.setUint16(2, prot.ids.login, true);
-        (new Uint8Array(login.buffer)).set(loginU8, p.data);
-        conn.send(login.buffer);
-
-        const connected = await new Promise(res => {
-            let done = false;
-            conn.addEventListener("message", ev => {
-                if (done)
-                    return;
-                done = true;
-
-                const msg = new DataView(ev.data);
-                if (msg.getUint16(2, true) === prot.ids.ack) {
-                    this._id = msg.getUint16(0, true);
-                    res(true);
-                } else {
-                    res(false);
-                }
-            }, {once: true});
-
-            conn.addEventListener("close", ev => {
-                done = done || (res(false), true);
-            }, {once: true});
-        });
-
-        if (!connected)
-            return false;
-
-        // Prepare for other messages
-        conn.addEventListener("message", ev => {
-            this.serverMessage(ev);
-        });
-
-        conn.addEventListener("close", ev => {
-            this._serverReliable = this._serverUnreliable =
-                this._serverUnreliablePC = null;
-            this.emitEvent("disconnected", ev);
-        });
-
-        this.emitEvent("connected", null);
-
-        this.connectUnreliable();
-
-        return true;
-    }
-
-    /**
-     * Establish an unreliable connection to the server.
-     */
-    async connectUnreliable() {
-        let pc: RTCPeerConnection = this._serverUnreliablePC;
-        if (!pc) {
-            pc = this._serverUnreliablePC = new RTCPeerConnection({
-                iceServers: util.iceServers
-            });
-
-            // Perfect negotiation logic (we're always polite)
-            pc.onnegotiationneeded = async () => {
-                try {
-                    await pc.setLocalDescription();
-
-                    const descrS = JSON.stringify({
-                        description: pc.localDescription
-                    });
-                    const descrU8 = util.encodeText(descrS);
-                    const p = prot.parts.rtc;
-                    const msg = new DataView(new ArrayBuffer(
-                        p.length + descrU8.length));
-                    msg.setUint16(0, -1, true);
-                    msg.setUint16(2, prot.ids.rtc, true);
-                    (new Uint8Array(msg.buffer)).set(
-                        descrU8, p.data);
-                    this._serverReliable.send(msg.buffer);
-
-                } catch (ex) {
-                    console.error(ex);
-
-                }
-            };
-
-            pc.onicecandidate = ev => {
-                const candS = JSON.stringify({
-                    candidate: ev.candidate
-                });
-                const candU8 = util.encodeText(candS);
-                const p = prot.parts.rtc;
-                const msg = new DataView(new ArrayBuffer(
-                    p.length + candU8.length));
-                msg.setUint16(0, -1, true);
-                msg.setUint16(2, prot.ids.rtc, true);
-                (new Uint8Array(msg.buffer)).set(
-                    candU8, p.data);
-                this._serverReliable.send(msg.buffer);
-            };
-        }
-
-        // Set up the actual data channel
-        const dc = pc.createDataChannel("unreliable", {
-            ordered: false,
-            maxRetransmits: 0
-        });
-        dc.binaryType = "arraybuffer";
-
-        dc.addEventListener("open", () => {
-            this._serverUnreliable = dc;
-        }, {once: true});
-
-        dc.addEventListener("close", () => {
-            if (this._serverUnreliable === dc)
-                this._serverUnreliable = null;
-        }, {once: true});
-
-        dc.onmessage = ev => {
-            this.serverMessage(ev);
-        };
-    }
-
-    /**
-     * Handler for RTC messages from the server.
-     */
-    private async serverRTCMessage(msg: DataView) {
-        const pc = this._serverUnreliablePC;
-        const p = prot.parts.rtc;
-        const dataU8 = (new Uint8Array(msg.buffer)).subarray(p.data);
-        const dataS = util.decodeText(dataU8);
-        const data = JSON.parse(dataS);
-
-        // Perfect negotiation (we're polite)
-        try {
-            if (data.description) {
-                await pc.setRemoteDescription(data.description);
-                if (data.description.type === "offer") {
-                    await pc.setLocalDescription();
-                    const descrS = JSON.stringify({
-                        description: pc.localDescription
-                    });
-                    const descrU8 = util.encodeText(descrS);
-                    const msg = new DataView(new ArrayBuffer(
-                        p.length + descrU8.length));
-                    msg.setUint16(0, -1, true);
-                    msg.setUint16(2, prot.ids.rtc, true);
-                    (new Uint8Array(msg.buffer)).set(descrU8, p.data);
-                    this._serverReliable.send(msg.buffer);
-                }
-
-            } else if (data.candidate) {
-                await pc.addIceCandidate(data.candidate);
-
-            }
-
-        } catch (ex) {
-            console.error(ex);
-
-        }
-    }
-
-    /**
-     * Handler for messages from the server.
-     */
-    private serverMessage(ev: MessageEvent) {
-        const msg = new DataView(ev.data);
-        const peerId = msg.getUint16(0, true);
-        const cmd = msg.getUint16(2, true);
-
-        switch (cmd) {
-            case prot.ids.ack:
-                // Nothing to do
-                break;
-
-            case prot.ids.formats:
-            {
-                const p = prot.parts.formats;
-                const formatsJSON =
-                    util.decodeText(
-                        (new Uint8Array(msg.buffer)).subarray(p.data));
-                this._formats = JSON.parse(formatsJSON);
-                break;
-            }
-
-            case prot.ids.rtc:
-                if (peerId === 65535 /* max u16 */) {
-                    // Server
-                    this.serverRTCMessage(msg);
-                } else {
-                    // Client (FIXME)
-                }
-                break;
-
-            case prot.ids.peer:
-            {
-                const p = prot.parts.peer;
-                const status = !!msg.getUint8(p.status);
-                const infoJSON =
-                    util.decodeText(
-                        (new Uint8Array(msg.buffer)).subarray(p.data));
-                while (this._p2p.length <= peerId)
-                    this._p2p.push(null);
-
-                // Delete any existing peer info
-                if (this._p2p[peerId]) {
-                    this._p2p[peerId].close();
-                    this._p2p[peerId] = null;
-                }
-
-                // Create the new one
-                if (status)
-                    this._p2p[peerId] = new peer.Peer(this, peerId);
-
-                // Or destroy the old one
-                else if (this._p2p[peerId]) {
-                    this._p2p[peerId].close();
-                    this._p2p[peerId] = null;
-                }
-
-                // And tell the user
-                this.emitEvent(
-                    status ? "peer-joined" : "peer-left",
-                    {
-                        id: peerId,
-                        info: JSON.parse(infoJSON)
-                    }
-                );
-                break;
-            }
-
-            case prot.ids.stream:
-            {
-                const p = prot.parts.stream;
-                const peerO = this._p2p[peerId];
-                if (!peerO)
+    for (const d of descr) {
+        if (typeof d[1] === "number") {
+            switch (d[1]) {
+                case 0: // netint
+                    util.encodeNetInt(retU8, d[0], d[2]);
                     break;
-                const id = msg.getUint8(p.id);
-                const dataJSON = util.decodeText(
-                    (new Uint8Array(msg.buffer)).subarray(p.data));
-                peerO.newStream(this._ac, id, JSON.parse(dataJSON));
-                break;
-            }
 
-            case prot.ids.data:
-            {
-                const peerO = this._p2p[peerId];
-                if (!peerO)
+                case 1:
+                    ret.setUint8(d[0], d[2]);
                     break;
-                peerO.recv(msg);
-                break;
+
+                case 2:
+                    ret.setUint16(d[0], d[2], true);
+                    break;
+
+                case 4:
+                    ret.setUint32(d[0], d[2], true);
+                    break;
+
+                default:
+                    throw new Error("Invalid description");
             }
 
-            default:
-                console.error(`[INFO] Unrecognized command 0x${cmd.toString(16)}`);
+        } else {
+            retU8.set(<Uint8Array> d[1], d[0]);
+
         }
     }
 
-    /**
-     * Add an outgoing audio track.
-     */
-    async addAudioTrack(track: audioCapture.AudioCapture) {
-        const stream = new outgoingAudioStream.OutgoingAudioStream(track);
-        this._audioTracks.push(stream);
-        await stream.init();
-        stream.on("data", data => this._onOutgoingAudioData(stream, data));
-        stream.on("error", error => this._onOutgoingAudioError(stream, error));
-        this._newOutgoingStream();
-    }
-
-    /**
-     * Send data.
-     * @param buf  Data to send
-     * @param reliable  Whether to send it over the reliable connection
-     */
-    private _send(buf: ArrayBuffer, reliable: boolean) {
-        if (!reliable && this._serverUnreliable)
-            this._serverUnreliable.send(buf);
-        else if (this._serverReliable)
-            this._serverReliable.send(buf);
-    }
-
-    /**
-     * Set up our outgoing stream.
-     */
-    private _newOutgoingStream() {
-        // Update the stream ID
-        const streamId = this._streamId =
-            (this._streamId + 1) % 8;
-        this._packetIdx = 0;
-
-        // Get our track listing
-        const tracks = this._audioTracks.map(x => ({
-            codec: "aopus",
-            frameDuration: 20000
-        }));
-
-        // Send out the info
-        const p = prot.parts.stream;
-        const dataBuf = util.encodeText(JSON.stringify(tracks));
-        const msg = new DataView(new ArrayBuffer(p.length + dataBuf.length));
-        msg.setUint16(0, this._id, true);
-        msg.setUint16(2, prot.ids.stream, true);
-        msg.setUint8(p.id, streamId << 4);
-        (new Uint8Array(msg.buffer)).set(dataBuf, p.data);
-        this._serverReliable.send(msg.buffer);
-    }
-
-    /**
-     * Handle outgoing audio data.
-     */
-    private _onOutgoingAudioData(
-        stream: outgoingAudioStream.OutgoingAudioStream,
-        data: wcp.EncodedAudioChunk
-    ) {
-        const trackIdx = this._audioTracks.indexOf(stream);
-        if (trackIdx < 0)
-            return;
-
-        const packetIdx = this._packetIdx++;
-
-        // Make the message
-        const p = prot.parts.data;
-        const netIntBytes = util.netIntBytes(packetIdx);
-        const msg = new DataView(new ArrayBuffer(
-            p.length + netIntBytes + data.byteLength));
-        const msgu8 = new Uint8Array(msg.buffer);
-        msg.setUint16(0, this._id, true);
-        msg.setUint16(2, prot.ids.data, true);
-        msg.setUint8(p.info, (this._streamId << 4) + trackIdx);
-        util.encodeNetInt(msgu8, p.data, packetIdx);
-        data.copyTo(msgu8.subarray(p.data + netIntBytes));
-
-        this._send(msg.buffer, false);
-    }
-
-    /**
-     * Handler for audio encoding errors.
-     */
-    private _onOutgoingAudioError(
-        stream: outgoingAudioStream.OutgoingAudioStream, error: DOMException
-    ) {
-        console.error(`[ERROR] ${error}\n${error.stack}`);
-
-        // Just remove the stream
-        const trackIdx = this._audioTracks.indexOf(stream);
-        if (trackIdx >= 0) {
-            this._audioTracks.splice(trackIdx, 1);
-            this._newOutgoingStream();
-        }
-
-        stream.close();
-    }
-
-    /**
-     * Our own peer ID.
-     */
-    private _id: number;
-
-    /**
-     * Our current stream ID, which just rotates.
-     */
-    private _streamId: number;
-
-    /**
-     * Current packet index within the stream.
-     */
-    private _packetIdx: number;
-
-    /**
-     * Our audio tracks.
-     */
-    private _audioTracks: outgoingAudioStream.OutgoingAudioStream[];
-
-    /**
-     * Reliable connection to the server.
-     */
-    private _serverReliable: WebSocket;
-
-    /**
-     * Unreliable connection to the server.
-     */
-    private _serverUnreliable: RTCDataChannel;
-
-    /**
-     * The peer connection corresponding to _serverUnreliable.
-     */
-    private _serverUnreliablePC: RTCPeerConnection;
-
-    /**
-     * Peers.
-     */
-    private _p2p: peer.Peer[];
-
-    /**
-     * Formats that the server accepts.
-     */
-    private _formats: string[];
+    return retAB;
 }

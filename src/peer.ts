@@ -14,8 +14,8 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+import * as abstractRoom from "./abstract-room";
 import * as audioPlayback from "./audio-playback";
-import * as events from "./events";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
 
@@ -38,7 +38,14 @@ export async function load() {
  */
 export class Peer {
     constructor(
-        public room: events.EventEmitter,
+        /**
+         * The room this peer is in.
+         */
+        public room: abstractRoom.AbstractRoom,
+
+        /**
+         * The ID of this peer.
+         */
         public id: number
     ) {
         this.streamId = -1;

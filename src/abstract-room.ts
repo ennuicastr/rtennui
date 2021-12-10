@@ -14,25 +14,11 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-import * as audioCapture from "./audio-capture";
-import * as peer from "./peer";
-import {protocol as prot} from "./protocol";
-import * as room from "./room";
-import * as util from "./util";
+import * as events from "./events";
 
-export async function load() {
-    await peer.load();
+/**
+ * The shared room functionality needed by both the room itself and peers (here
+ * to avoid circular dependencies)
+ */
+export abstract class AbstractRoom extends events.EventEmitter {
 }
-
-export type AudioCapture = audioCapture.AudioCapture;
-export const AudioCapture = audioCapture.AudioCapture;
-export const createAudioCapture = audioCapture.createAudioCapture;
-
-export type Connection = room.Connection;
-export const Connection = room.Connection;
-
-export const protocol = prot;
-
-export const netIntBytes = util.netIntBytes;
-export const encodeNetInt = util.encodeNetInt;
-export const decodeNetInt = util.decodeNetInt;
