@@ -36,33 +36,55 @@ export const protocol = {
     },
 
     parts: {
+        /* login:
+         * c->s: Log in with the given JSON credentials
+         */
         login: {
             length: 4, // + the actual data
             data: 4
         },
 
+        /* formats:
+         * c->s: Inform the server of a change in supported formats
+         * s->c: Inform the client of the list of supported formats
+         */
         formats: {
             length: 4, // + the actual data
             data: 4
         },
 
+        /* rtc:
+         * c->s, s->c, c->s->c: RTC negotiation
+         */
         rtc: {
             length: 4, // + the actual data
             data: 4
         },
 
+        /* peer:
+         * s->c: Inform the client of the status of a peer
+         * c->s: Inform the server of the status of the P2P connection between
+         *       this client and another client. `data` unused.
+         */
         peer: {
             length: 5, // + data
             status: 4, // uint8, 1 for connected
             data: 5 // JSON
         },
 
+        /* stream:
+         * c->s, s->c, c->s->c: Inform fellow clients of the formats and ID of
+         *       a stream being sent.
+         */
         stream: {
             length: 5, // + data
             id: 4, // only bits in 0x70 used
             data: 5
         },
 
+        /* data:
+         * c->s->c, c->c: Send encoded data.
+         */
         data: {
             length: 5, // + data
             info: 4, // key, stream idx, track idx

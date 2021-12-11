@@ -21,4 +21,13 @@ import * as events from "./events";
  * to avoid circular dependencies)
  */
 export abstract class AbstractRoom extends events.EventEmitter {
+    /**
+     * Get *our* ID in this room.
+     */
+    abstract getOwnId(): number;
+
+    /**
+     * Send a message to the server.
+     */
+    abstract sendServer(msg: ArrayBuffer): void;
 }

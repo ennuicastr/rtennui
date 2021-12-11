@@ -330,7 +330,11 @@ export class Connection extends abstractRoom.AbstractRoom {
                     // Server
                     this.serverRTCMessage(msg);
                 } else {
-                    // Client (FIXME)
+                    // Client
+                    const peer = this._p2p[peerId];
+                    if (!peer)
+                        break;
+                    peer.rtcRecv(msg);
                 }
                 break;
 
@@ -351,14 +355,19 @@ export class Connection extends abstractRoom.AbstractRoom {
                 }
 
                 // Create the new one
+                let p2p: peer.Peer = null;
                 if (status)
-                    this._p2p[peerId] = new peer.Peer(this, peerId);
+                    p2p = this._p2p[peerId] = new peer.Peer(this, peerId);
 
                 // Or destroy the old one
                 else if (this._p2p[peerId]) {
                     this._p2p[peerId].close();
                     this._p2p[peerId] = null;
                 }
+
+                // Establish P2P connections
+                if (p2p)
+                    p2p.p2p();
 
                 // And tell the user
                 this.emitEvent(
@@ -415,11 +424,27 @@ export class Connection extends abstractRoom.AbstractRoom {
      * @param buf  Data to send
      * @param reliable  Whether to send it over the reliable connection
      */
-    private _send(buf: ArrayBuffer, reliable: boolean) {
-        if (!reliable && this._serverUnreliable)
-            this._serverUnreliable.send(buf);
-        else if (this._serverReliable)
-            this._serverReliable.send(buf);
+    private _sendData(buf: ArrayBuffer, reliable: boolean) {
+        // Send directly
+        let needRelay = false;
+        for (const peer of this._p2p) {
+            if (!peer)
+                continue;
+            if (!reliable && peer.unreliable)
+                peer.unreliable.send(buf);
+            else if (reliable && peer.reliable)
+                peer.reliable.send(buf);
+            else
+                needRelay = true;
+        }
+
+        // Relay if needed
+        if (needRelay) {
+            if (!reliable && this._serverUnreliable)
+                this._serverUnreliable.send(buf);
+            else if (this._serverReliable)
+                this._serverReliable.send(buf);
+        }
     }
 
     /**
@@ -481,7 +506,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         const msgu8 = new Uint8Array(msg);
         data.copyTo(msgu8.subarray(p.data + netIntBytes));
 
-        this._send(msg, false);
+        this._sendData(msg, false);
     }
 
     /**
@@ -500,6 +525,13 @@ export class Connection extends abstractRoom.AbstractRoom {
         }
 
         stream.close();
+    }
+
+    // AbstractRoom methods
+    getOwnId() { return this._id; }
+    sendServer(msg: ArrayBuffer) {
+        if (this._serverReliable)
+            this._serverReliable.send(msg);
     }
 
     /**

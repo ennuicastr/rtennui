@@ -16,6 +16,7 @@
 
 import * as abstractRoom from "./abstract-room";
 import * as audioPlayback from "./audio-playback";
+import * as net from "./net";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
 
@@ -54,6 +55,9 @@ export class Peer {
         this.data = null;
         this.offset = 0;
         this.tracks = null;
+        this.rtc = null;
+        this.rtcMakingOffer = false;
+        this.rtcIgnoreOffer = false;
         this.reliable = this.unreliable = null;
     }
 
@@ -62,6 +66,219 @@ export class Peer {
      */
     async close() {
         await this.closeStream();
+        if (this.rtc) {
+            this.rtc.close();
+            this.rtc = null;
+        }
+    }
+
+    /**
+     * Establish peer-to-peer connections.
+     */
+    async p2p() {
+        // Create the RTCPeerConnection
+        let peer: RTCPeerConnection = this.rtc;
+        if (!peer) {
+            peer = this.rtc = new RTCPeerConnection({
+                iceServers: util.iceServers
+            });
+
+            // Perfect negotiation pattern
+            peer.onnegotiationneeded = async () => {
+                try {
+                    this.rtcMakingOffer = true;
+                    await peer.setLocalDescription();
+                    const p = prot.parts.rtc;
+                    const data = util.encodeText(
+                        JSON.stringify({
+                            description: peer.localDescription
+                        })
+                    );
+                    const msg = net.createPacket(
+                        p.length + data.length,
+                        this.id, prot.ids.rtc,
+                        [[p.data, data]]
+                    );
+                    this.room.sendServer(msg);
+
+                } catch (ex) {
+                    console.error(ex);
+
+                }
+
+                this.rtcMakingOffer = false;
+            };
+
+            peer.onicecandidate = ev => {
+                const p = prot.parts.rtc;
+                const data = util.encodeText(
+                    JSON.stringify({
+                        candidate: ev.candidate
+                    })
+                );
+                const msg = net.createPacket(
+                    p.length + data.length,
+                    this.id, prot.ids.rtc,
+                    [[p.data, data]]
+                );
+                this.room.sendServer(msg);
+            };
+
+            // Incoming data channels
+            peer.ondatachannel = ev => {
+                const chan = ev.channel;
+                if (chan.label === "reliable")
+                    chan.onmessage = ev => this.onMessage(ev, true);
+                else
+                    chan.onmessage = ev => this.onMessage(ev, false);
+            };
+        }
+
+        // Outgoing data channels
+        if (!this.reliable) {
+            const chan = peer.createDataChannel("reliable");
+            chan.binaryType = "arraybuffer";
+
+            chan.addEventListener("open", () => {
+                this.reliable = chan;
+                this.p2p();
+            }, {once: true});
+
+            chan.addEventListener("close", () => {
+                if (this.reliable === chan) {
+                    this.reliable = null;
+
+                    const p = prot.parts.peer;
+                    const msg = net.createPacket(
+                        p.length, this.id, prot.ids.peer,
+                        [[p.status, 1, 0]]
+                    );
+                    this.room.sendServer(msg);
+                }
+            }, {once: true});
+
+            // Only do one at a time
+            return;
+        }
+
+        if (!this.unreliable) {
+            const chan = peer.createDataChannel("unreliable", {
+                ordered: false,
+                maxRetransmits: 0
+            });
+            chan.binaryType = "arraybuffer";
+
+            chan.addEventListener("open", () => {
+                this.unreliable = chan;
+                this.p2p();
+            }, {once: true});
+
+            chan.addEventListener("close", () => {
+                if (this.unreliable === chan) {
+                    this.unreliable = null;
+
+                    const p = prot.parts.peer;
+                    const msg = net.createPacket(
+                        p.length, this.id, prot.ids.peer,
+                        [[p.status, 1, 0]]
+                    );
+                    this.room.sendServer(msg);
+                }
+            }, {once: true});
+
+            return;
+        }
+
+        // Everything's open, inform the server
+        {
+            const p = prot.parts.peer;
+            const msg = net.createPacket(
+                p.length, this.id, prot.ids.peer,
+                [[p.status, 1, 1]]
+            );
+            this.room.sendServer(msg);
+        }
+    }
+
+    /**
+     * Handler for incoming RTC negotiation messages from this user.
+     */
+    async rtcRecv(pkt: DataView) {
+        const selfId = this.room.getOwnId();
+        const polite = selfId > this.id;
+
+        // Get out the data
+        const p = prot.parts.rtc;
+        let msg: any = null;
+        try {
+            const msgU8 = (new Uint8Array(pkt.buffer)).subarray(p.data);
+            const msgS = util.decodeText(msgU8);
+            msg = JSON.parse(msgS);
+        } catch (ex) {}
+        if (!msg)
+            return;
+
+        // Perfect negotiation pattern
+        const peer: RTCPeerConnection = this.rtc;
+        try {
+            if (msg.description) {
+                const offerCollision =
+                    (msg.description.type === "offer") &&
+                    (this.rtcMakingOffer ||
+                     peer.signalingState !== "stable");
+                const ignoreOffer = this.rtcIgnoreOffer =
+                    !polite && offerCollision;
+                if (ignoreOffer)
+                    return;
+
+                await peer.setRemoteDescription(msg.description);
+                if (msg.description.type === "offer") {
+                    await peer.setLocalDescription();
+
+                    const p = prot.parts.rtc;
+                    const data = util.encodeText(
+                        JSON.stringify({
+                            description: peer.localDescription
+                        })
+                    );
+                    const msg = net.createPacket(
+                        p.length + data.length,
+                        this.id, prot.ids.rtc,
+                        [[p.data, data]]
+                    );
+                    this.room.sendServer(msg);
+                }
+
+            } else if (msg.candidate) {
+                try {
+                    await peer.addIceCandidate(msg.candidate);
+                } catch (ex) {
+                    if (!this.rtcIgnoreOffer)
+                        throw ex;
+                }
+
+            }
+
+        } catch (ex) {
+            console.error(ex);
+
+        }
+    }
+
+    /**
+     * Handler for incoming messages from this peer.
+     */
+    onMessage(ev: MessageEvent<ArrayBuffer>, reliable: boolean) {
+        const msg = new DataView(ev.data);
+        if (msg.byteLength < 4)
+            return;
+
+        // Only data is allowed on the direct connection
+        const cmd = msg.getUint16(2, true);
+        if (cmd !== prot.ids.data)
+            return;
+
+        this.recv(msg);
     }
 
     /**
@@ -154,7 +371,7 @@ export class Peer {
                 this.room.emitEvent("track-ended-audio", {
                     peer: this.id,
                     id: i,
-                    node: track.player
+                    node: (<audioPlayback.AudioPlayback> track.player).node()
                 });
             }
 
@@ -286,7 +503,7 @@ export class Peer {
                 );
 
             if (fframes.length !== 1)
-                console.error("BAD!");
+                console.error("[ERROR] Number of frames is not 1");
 
             packet.decoded = fframes[0].data;
             packet.decodingRes();
@@ -401,6 +618,21 @@ export class Peer {
      * Each track's information.
      */
     tracks: Track[];
+
+    /**
+     * The RTC connection to this peer.
+     */
+    rtc: RTCPeerConnection;
+
+    /**
+     * Perfect negotiation: Are we making an offer?
+     */
+    rtcMakingOffer: boolean;
+
+    /**
+     * Perfect negotiation: Are we ignoring offers?
+     */
+    rtcIgnoreOffer: boolean;
 
     /**
      * The reliable connection to this peer.
