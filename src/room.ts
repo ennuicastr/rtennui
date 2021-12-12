@@ -44,7 +44,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._serverReliable = null;
         this._serverUnreliable = null;
         this._serverUnreliablePC = null;
-        this._p2p = [];
+        this._peers = [];
     }
 
     /**
@@ -331,7 +331,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                     this.serverRTCMessage(msg);
                 } else {
                     // Client
-                    const peer = this._p2p[peerId];
+                    const peer = this._peers[peerId];
                     if (!peer)
                         break;
                     peer.rtcRecv(msg);
@@ -345,24 +345,24 @@ export class Connection extends abstractRoom.AbstractRoom {
                 const infoJSON =
                     util.decodeText(
                         (new Uint8Array(msg.buffer)).subarray(p.data));
-                while (this._p2p.length <= peerId)
-                    this._p2p.push(null);
+                while (this._peers.length <= peerId)
+                    this._peers.push(null);
 
                 // Delete any existing peer info
-                if (this._p2p[peerId]) {
-                    this._p2p[peerId].close();
-                    this._p2p[peerId] = null;
+                if (this._peers[peerId]) {
+                    this._peers[peerId].close();
+                    this._peers[peerId] = null;
                 }
 
                 // Create the new one
                 let p2p: peer.Peer = null;
                 if (status)
-                    p2p = this._p2p[peerId] = new peer.Peer(this, peerId);
+                    p2p = this._peers[peerId] = new peer.Peer(this, peerId);
 
                 // Or destroy the old one
-                else if (this._p2p[peerId]) {
-                    this._p2p[peerId].close();
-                    this._p2p[peerId] = null;
+                else if (this._peers[peerId]) {
+                    this._peers[peerId].close();
+                    this._peers[peerId] = null;
                 }
 
                 // Establish P2P connections
@@ -383,7 +383,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             case prot.ids.stream:
             {
                 const p = prot.parts.stream;
-                const peerO = this._p2p[peerId];
+                const peerO = this._peers[peerId];
                 if (!peerO)
                     break;
                 const id = msg.getUint8(p.id);
@@ -395,7 +395,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
             case prot.ids.data:
             {
-                const peerO = this._p2p[peerId];
+                const peerO = this._peers[peerId];
                 if (!peerO)
                     break;
                 peerO.recv(msg);
@@ -427,7 +427,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     private _sendData(buf: ArrayBuffer, reliable: boolean) {
         // Send directly
         let needRelay = false;
-        for (const peer of this._p2p) {
+        for (const peer of this._peers) {
             if (!peer)
                 continue;
             if (!reliable && peer.unreliable)
@@ -560,19 +560,19 @@ export class Connection extends abstractRoom.AbstractRoom {
     private _serverReliable: WebSocket;
 
     /**
-     * Unreliable connection to the server.
-     */
-    private _serverUnreliable: RTCDataChannel;
-
-    /**
      * The peer connection corresponding to _serverUnreliable.
      */
     private _serverUnreliablePC: RTCPeerConnection;
 
     /**
+     * Unreliable connection to the server.
+     */
+    private _serverUnreliable: RTCDataChannel;
+
+    /**
      * Peers.
      */
-    private _p2p: peer.Peer[];
+    private _peers: peer.Peer[];
 
     /**
      * Formats that the server accepts.
