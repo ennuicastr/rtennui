@@ -19,6 +19,7 @@ import * as peer from "./peer";
 import {protocol as prot} from "./protocol";
 import * as room from "./room";
 import * as util from "./util";
+import * as videoCapture from "./video-capture";
 
 export async function load() {
     await peer.load();
@@ -36,3 +37,7 @@ export const protocol = prot;
 export const netIntBytes = util.netIntBytes;
 export const encodeNetInt = util.encodeNetInt;
 export const decodeNetInt = util.decodeNetInt;
+
+export type VideoCapture = videoCapture.VideoCapture;
+export const VideoCapture = videoCapture.VideoCapture;
+export const createVideoCapture = videoCapture.createVideoCapture;

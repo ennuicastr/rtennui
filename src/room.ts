@@ -18,9 +18,11 @@ import * as abstractRoom from "./abstract-room";
 import * as audioCapture from "./audio-capture";
 import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
+import * as outgoingVideoStream from "./outgoing-video-stream";
 import * as peer from "./peer";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
+import * as videoCapture from "./video-capture";
 
 import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
@@ -40,6 +42,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     ) {
         super();
         this._streamId = 0;
+        this._videoTracks = [];
         this._audioTracks = [];
         this._serverReliable = null;
         this._serverUnreliable = null;
@@ -408,14 +411,26 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     /**
+     * Add an outgoing video track.
+     */
+    async addVideoTrack(track: videoCapture.VideoCapture) {
+        const stream = new outgoingVideoStream.OutgoingVideoStream(track);
+        this._videoTracks.push(stream);
+        await stream.init();
+        stream.on("data", data => this._onOutgoingData(stream, data));
+        stream.on("error", error => this._onOutgoingError(stream, error));
+        this._newOutgoingStream();
+    }
+
+    /**
      * Add an outgoing audio track.
      */
     async addAudioTrack(track: audioCapture.AudioCapture) {
         const stream = new outgoingAudioStream.OutgoingAudioStream(track);
         this._audioTracks.push(stream);
         await stream.init();
-        stream.on("data", data => this._onOutgoingAudioData(stream, data));
-        stream.on("error", error => this._onOutgoingAudioError(stream, error));
+        stream.on("data", data => this._onOutgoingData(stream, data));
+        stream.on("error", error => this._onOutgoingError(stream, error));
         this._newOutgoingStream();
     }
 
@@ -457,10 +472,15 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._packetIdx = 0;
 
         // Get our track listing
-        const tracks = this._audioTracks.map(x => ({
-            codec: "aopus",
-            frameDuration: 20000
-        }));
+        const tracks = []
+            .concat(this._videoTracks.map(x => ({
+                codec: "vh263p",
+                frameDuration: ~~(1000000 / x.capture.getFramerate())
+            })))
+            .concat(this._audioTracks.map(x => ({
+                codec: "aopus",
+                frameDuration: 20000
+            })));
 
         // Send out the info
         const p = prot.parts.stream;
@@ -477,17 +497,35 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     /**
-     * Handle outgoing audio data.
+     * Handle outgoing data.
      */
-    private _onOutgoingAudioData(
-        stream: outgoingAudioStream.OutgoingAudioStream,
-        data: wcp.EncodedAudioChunk
+    private _onOutgoingData(
+        stream: outgoingVideoStream.OutgoingVideoStream |
+            outgoingAudioStream.OutgoingAudioStream,
+        data: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk
     ) {
-        const trackIdx = this._audioTracks.indexOf(stream);
-        if (trackIdx < 0)
-            return;
+        let isVideo = true;
+        let trackIdx = this._videoTracks.indexOf(
+            <outgoingVideoStream.OutgoingVideoStream> stream);
+        if (trackIdx < 0) {
+            isVideo = false;
+            trackIdx = this._audioTracks.indexOf(
+                <outgoingAudioStream.OutgoingAudioStream> stream);
+            if (trackIdx < 0)
+                return;
+
+            // Audio tracks come after video tracks
+            trackIdx += this._videoTracks.length;
+        }
 
         const packetIdx = this._packetIdx++;
+
+        // Info byte
+        const key = isVideo && data.type === "key";
+        const info =
+            (key ? 0x80 : 0) |
+            (this._streamId << 4) |
+            trackIdx;
 
         // Make the message
         const p = prot.parts.data;
@@ -496,7 +534,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             p.length + netIntBytes + data.byteLength,
             this._id, prot.ids.data,
             [
-                [p.info, 1, (this._streamId << 4) + trackIdx],
+                [p.info, 1, info],
                 [p.data, 0, packetIdx]
                 // Actual data copied specially
             ]
@@ -506,22 +544,35 @@ export class Connection extends abstractRoom.AbstractRoom {
         const msgu8 = new Uint8Array(msg);
         data.copyTo(msgu8.subarray(p.data + netIntBytes));
 
-        this._sendData(msg, false);
+        this._sendData(msg, key);
     }
 
     /**
-     * Handler for audio encoding errors.
+     * Handler for encoding errors.
      */
-    private _onOutgoingAudioError(
-        stream: outgoingAudioStream.OutgoingAudioStream, error: DOMException
+    private _onOutgoingError(
+        stream: outgoingVideoStream.OutgoingVideoStream |
+            outgoingAudioStream.OutgoingAudioStream,
+        error: DOMException
     ) {
         console.error(`[ERROR] ${error}\n${error.stack}`);
 
         // Just remove the stream
-        const trackIdx = this._audioTracks.indexOf(stream);
-        if (trackIdx >= 0) {
-            this._audioTracks.splice(trackIdx, 1);
-            this._newOutgoingStream();
+        {
+            const trackIdx = this._videoTracks.indexOf(
+                <outgoingVideoStream.OutgoingVideoStream> stream);
+            if (trackIdx >= 0) {
+                this._videoTracks.splice(trackIdx, 1);
+                this._newOutgoingStream();
+            }
+        }
+        {
+            const trackIdx = this._audioTracks.indexOf(
+                <outgoingAudioStream.OutgoingAudioStream> stream);
+            if (trackIdx >= 0) {
+                this._audioTracks.splice(trackIdx, 1);
+                this._newOutgoingStream();
+            }
         }
 
         stream.close();
@@ -548,6 +599,11 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Current packet index within the stream.
      */
     private _packetIdx: number;
+
+    /**
+     * Our video tracks.
+     */
+    private _videoTracks: outgoingVideoStream.OutgoingVideoStream[];
 
     /**
      * Our audio tracks.

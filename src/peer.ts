@@ -19,6 +19,7 @@ import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
+import * as videoPlayback from "./video-playback";
 
 import type * as libavT from "libav.js";
 declare let LibAV: libavT.LibAVWrapper;
@@ -305,52 +306,85 @@ export class Peer {
             const trackInfo = info[i];
             const track = tracks[i];
 
-            if (trackInfo.codec !== "aopus") {
-                // Unsupported
-                continue;
-            }
-
-            // Set up the player
-            const player = track.player =
-                await audioPlayback.createAudioPlayback(ac);
-
-            this.room.emitEvent("track-started-audio", {
-                peer: this.id,
-                id: i,
-                node: player.node()
-            });
-
-            // Set up the decoder
-            const dec = track.decoder = new Decoder();
-            dec.decoder = new LibAVWebCodecs.AudioDecoder({
-                output: data => dec.output(data),
-                error: error => dec.error(error)
-            });
-            await dec.decoder.configure({
-                codec: "opus",
-                sampleRate: 48000,
-                numberOfChannels: 1
-            });
-
-            // Set up the resampler
-            const pChannels = player.channels();
-            track.resampler = await resampler.ff_init_filter_graph(
-                "anull",
-                {
-                    sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
-                    sample_rate: 48000,
-                    channel_layout: 4
-                },
-                {
-                    sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
-                    sample_rate: ac.sampleRate,
-                    channel_layout:
-                        (pChannels === 1)
-                        ? 4
-                        : ((1<<pChannels)-1)
+            if (trackInfo.codec[0] === "v") {
+                // Video track
+                track.video = true;
+                if (trackInfo.codec !== "vh263p") {
+                    // Unsupported
+                    continue;
                 }
-            );
-            track.framePtr = await resampler.av_frame_alloc();
+
+                const player = track.player =
+                    await videoPlayback.createVideoPlayback();
+
+                this.room.emitEvent("track-started-video", {
+                    peer: this.id,
+                    id: i,
+                    element: player.element()
+                });
+
+                // Set up the decoder
+                const dec = track.decoder = new Decoder();
+                dec.decoder = new LibAVWebCodecs.VideoDecoder({
+                    output: data => dec.output(data),
+                    error: error => dec.error(error)
+                });
+                await dec.decoder.configure({
+                    codec: {libavjs:{
+                        codec: "h263p"
+                    }}
+                });
+
+            } else if (trackInfo.codec[0] === "a") {
+                // Audio track
+                if (trackInfo.codec !== "aopus") {
+                    // Unsupported
+                    continue;
+                }
+
+                // Set up the player
+                const player = track.player =
+                    await audioPlayback.createAudioPlayback(ac);
+
+                this.room.emitEvent("track-started-audio", {
+                    peer: this.id,
+                    id: i,
+                    node: player.node()
+                });
+
+                // Set up the decoder
+                const dec = track.decoder = new Decoder();
+                dec.decoder = new LibAVWebCodecs.AudioDecoder({
+                    output: data => dec.output(data),
+                    error: error => dec.error(error)
+                });
+                await dec.decoder.configure({
+                    codec: "opus",
+                    sampleRate: 48000,
+                    numberOfChannels: 1
+                });
+
+                // Set up the resampler
+                const pChannels = player.channels();
+                track.resampler = await resampler.ff_init_filter_graph(
+                    "anull",
+                    {
+                        sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
+                        sample_rate: 48000,
+                        channel_layout: 4
+                    },
+                    {
+                        sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
+                        sample_rate: ac.sampleRate,
+                        channel_layout:
+                            (pChannels === 1)
+                            ? 4
+                            : ((1<<pChannels)-1)
+                    }
+                );
+                track.framePtr = await resampler.av_frame_alloc();
+
+            }
 
         }
     }
@@ -368,11 +402,22 @@ export class Peer {
             const track = this.tracks[i];
 
             if (track.player) {
-                this.room.emitEvent("track-ended-audio", {
-                    peer: this.id,
-                    id: i,
-                    node: (<audioPlayback.AudioPlayback> track.player).node()
-                });
+                const player = track.player;
+                if (player instanceof videoPlayback.VideoPlayback) {
+                    this.room.emitEvent("track-ended-video", {
+                        peer: this.id,
+                        id: i,
+                        element: player.element()
+                    });
+
+                } else {
+                    this.room.emitEvent("track-ended-audio", {
+                        peer: this.id,
+                        id: i,
+                        node: player.node()
+                    });
+
+                }
             }
 
             if (track.decoder)
@@ -419,7 +464,7 @@ export class Peer {
                 this.data.push(null);
 
             this.data[idxOffset] = new IncomingData(
-                trackIdx, idx, datau8.slice(offset.offset));
+                trackIdx, idx, key, datau8.slice(offset.offset));
             this.tracks[trackIdx].duration +=
                 this.stream[trackIdx].frameDuration;
 
@@ -465,49 +510,69 @@ export class Peer {
         packet.decoding = true;
 
         // Send it for decoding
-        const chunk = new LibAVWebCodecs.EncodedAudioChunk({
-            data: packet.encoded,
-            type: <any> "key",
-            timestamp: 0
-        });
+        let chunk: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk;
+        if (track.video) {
+            chunk = new LibAVWebCodecs.EncodedVideoChunk({
+                data: packet.encoded,
+                type: <any> (packet.key ? "key" : "delta"),
+                timestamp: 0
+            });
+
+        } else {
+            chunk = new LibAVWebCodecs.EncodedAudioChunk({
+                data: packet.encoded,
+                type: <any> "key",
+                timestamp: 0
+            });
+
+        }
         decoder.decoder.decode(chunk);
 
         // And receive it
-        decoder.get().then(async function(halfDecoded) {
-            // Convert it to a libav frame
-            const copy: wcp.AudioDataCopyToOptions = {
-                format: <any> "f32-planar",
-                planeIndex: 0
-            };
-            const buf = new Float32Array(
-                new ArrayBuffer(halfDecoded.allocationSize(copy)));
-            halfDecoded.copyTo(buf, copy);
-            halfDecoded.close();
+        if (track.video) {
+            decoder.get().then(frame => {
+                packet.decoded = <wcp.VideoFrame> frame;
+                packet.decodingRes();
+            });
 
-            const frame: libavT.Frame = {
-                data: [buf],
-                format: resampler.AV_SAMPLE_FMT_FLTP,
-                sample_rate: 48000,
-                channel_layout: 4,
-                pts: 0,
-                ptshi: 0
-            };
+        } else {
+            decoder.get().then(async halfDecoded => {
+                // Convert it to a libav frame
+                const copy: wcp.AudioDataCopyToOptions = {
+                    format: <any> "f32-planar",
+                    planeIndex: 0
+                };
+                const buf = new Float32Array(
+                    new ArrayBuffer(halfDecoded.allocationSize(copy)));
+                halfDecoded.copyTo(buf, copy);
+                halfDecoded.close();
 
-            // Resample it
-            const fframes =
-                await resampler.ff_filter_multi(
-                    track.resampler[1],
-                    track.resampler[2],
-                    track.framePtr,
-                    [frame]
-                );
+                const frame: libavT.Frame = {
+                    data: [buf],
+                    format: resampler.AV_SAMPLE_FMT_FLTP,
+                    sample_rate: 48000,
+                    channel_layout: 4,
+                    pts: 0,
+                    ptshi: 0
+                };
 
-            if (fframes.length !== 1)
-                console.error("[ERROR] Number of frames is not 1");
+                // Resample it
+                const fframes =
+                    await resampler.ff_filter_multi(
+                        track.resampler[1],
+                        track.resampler[2],
+                        track.framePtr,
+                        [frame]
+                    );
 
-            packet.decoded = fframes[0].data;
-            packet.decodingRes();
-        });
+                if (fframes.length !== 1)
+                    console.error("[ERROR] Number of frames is not 1");
+
+                packet.decoded = fframes[0].data;
+                packet.decodingRes();
+            });
+
+        }
     }
 
     /**
@@ -575,8 +640,15 @@ export class Peer {
 
             // And play it
             const track = this.tracks[chunk.trackIdx];
-            (<audioPlayback.AudioPlayback> track.player)
-                .play(<Float32Array[]> chunk.decoded);
+            if (track.video) {
+                (<videoPlayback.VideoPlayback> track.player)
+                    .display(<wcp.VideoFrame> chunk.decoded);
+
+            } else {
+                (<audioPlayback.AudioPlayback> track.player)
+                    .play(<Float32Array[]> chunk.decoded);
+
+            }
 
             // Set the time on the next relevant packet
             for (const next of this.data) {
@@ -650,12 +722,18 @@ export class Peer {
  */
 class Track {
     constructor() {
+        this.video = false;
         this.duration = 0;
         this.decoder = null;
         this.resampler = null;
         this.framePtr = 0;
         this.player = null;
     }
+
+    /**
+     * Is this a video track?
+     */
+    video: boolean;
 
     /**
      * The duration of data that we have for this track.
@@ -680,7 +758,7 @@ class Track {
     /**
      * Player for this track.
      */
-    player: audioPlayback.AudioPlayback | HTMLCanvasElement;
+    player: audioPlayback.AudioPlayback | videoPlayback.VideoPlayback;
 }
 
 /**
@@ -697,6 +775,11 @@ class IncomingData {
          * The index of this packet.
          */
         public index: number,
+
+        /**
+         * Is this a keyframe?
+         */
+        public key: boolean,
 
         /**
          * The raw data off the wire.
