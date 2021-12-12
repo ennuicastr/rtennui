@@ -512,11 +512,27 @@ export class Peer {
         // Send it for decoding
         let chunk: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk;
         if (track.video) {
-            chunk = new LibAVWebCodecs.EncodedVideoChunk({
-                data: packet.encoded,
-                type: <any> (packet.key ? "key" : "delta"),
-                timestamp: 0
-            });
+            if (decoder.keyChunkRequired && !packet.key) {
+                // Not decodable
+                packet.decoded = new LibAVWebCodecs.VideoFrame(
+                    new Uint8Array(640 * 360 * 4), {
+                    format: <any> "RGBA",
+                    codedWidth: 640,
+                    codedHeight: 360,
+                    timestamp: 0
+                });
+                packet.decodingRes();
+                return;
+
+            } else {
+                decoder.keyChunkRequired = false;
+                chunk = new LibAVWebCodecs.EncodedVideoChunk({
+                    data: packet.encoded,
+                    type: <any> (packet.key ? "key" : "delta"),
+                    timestamp: 0
+                });
+
+            }
 
         } else {
             chunk = new LibAVWebCodecs.EncodedAudioChunk({
@@ -824,6 +840,7 @@ class IncomingData {
  */
 class Decoder {
     constructor() {
+        this.keyChunkRequired = true;
         this.decoder = null;
         this.waiters = [];
         this.buf = [];
@@ -854,6 +871,11 @@ class Decoder {
         await new Promise<void>(res => this.waiters.push(res));
         return this.buf.shift();
     }
+
+    /**
+     * Set at the beginning when we still need a key chunk to start decoding.
+     */
+    keyChunkRequired: boolean;
 
     decoder: wcp.AudioDecoder | wcp.VideoDecoder;
     waiters: (() => void)[];

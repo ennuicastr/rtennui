@@ -149,14 +149,19 @@ export class VideoCaptureCanvas extends VideoCapture {
         video.srcObject = source;
         video.play().catch(console.error);
 
+        // Timestamp management
+        let ts = 0;
+        const tsStep = Math.round(1000000 / fr);
+
         // Start our capture
         this._interval = setInterval(() => {
             if (!this.VideoFrame)
                 return;
 
             const frame = new this.VideoFrame(video, {
-                timestamp: Math.floor(1000000 * video.currentTime)
+                timestamp: ts
             });
+            ts += tsStep;
             this.emitEvent("data", frame);
         }, ~~(1000 / fr));
     }

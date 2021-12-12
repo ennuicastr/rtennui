@@ -28,16 +28,21 @@ export class OutgoingVideoStream extends events.EventEmitter {
         public capture: videoCapture.VideoCapture
     ) {
         super();
+        this._ct = 0;
+        this._ifreq = 0;
     }
 
     /**
      * Initialize this outgoing video stream and start it generating video.
      */
     async init() {
+        this.capture.VideoFrame = LibAVWebCodecs.VideoFrame;
+
         // Our video encoder configuration
         const w = this.capture.getWidth();
         const h = this.capture.getHeight();
         const fr = this.capture.getFramerate();
+        this._ifreq = ~~(fr * 2);
         const config: wcp.VideoEncoderConfig = {
             codec: {libavjs:{
                 codec: "h263p",
@@ -97,9 +102,20 @@ export class OutgoingVideoStream extends events.EventEmitter {
     private _oninput(data: wcp.VideoFrame) {
         if (!this._encoder)
             return;
-        this._encoder.encode(data);
+        let key = false;
+        if (++this._ct >= this._ifreq) {
+            this._ct = 0;
+            key = true;
+        }
+        this._encoder.encode(data, {keyFrame: key});
         data.close();
     }
+
+    // Number of frames encoded since the last keyframe
+    private _ct: number;
+
+    // Number of frames per keyframe;
+    private _ifreq: number;
 
     // Underlying encoder environment
     private _env: wcp.VideoEncoderEnvironment;
