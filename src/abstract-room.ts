@@ -18,16 +18,18 @@ import * as events from "./events";
 
 /**
  * The shared room functionality needed by both the room itself and peers (here
- * to avoid circular dependencies)
+ * to avoid circular dependencies). Note that these methods are named with _
+ * because they're internal to RTEnnui (and should not be called by external
+* users), but they are public.
  */
 export abstract class AbstractRoom extends events.EventEmitter {
     /**
      * Get *our* ID in this room.
      */
-    abstract getOwnId(): number;
+    abstract _getOwnId(): number;
 
     /**
      * Send a message to the server.
      */
-    abstract sendServer(msg: ArrayBuffer): void;
+    abstract _sendServer(msg: ArrayBuffer): void;
 }

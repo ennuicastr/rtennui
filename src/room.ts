@@ -175,7 +175,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         // Prepare for other messages
         conn.addEventListener("message", ev => {
-            this.serverMessage(ev);
+            this._serverMessage(ev);
         });
 
         conn.addEventListener("close", ev => {
@@ -186,7 +186,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         this.emitEvent("connected", null);
 
-        this.connectUnreliable();
+        this._connectUnreliable();
 
         return true;
     }
@@ -194,7 +194,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Establish an unreliable connection to the server.
      */
-    async connectUnreliable() {
+    private async _connectUnreliable() {
         let pc: RTCPeerConnection = this._serverUnreliablePC;
         if (!pc) {
             pc = this._serverUnreliablePC = new RTCPeerConnection({
@@ -258,14 +258,14 @@ export class Connection extends abstractRoom.AbstractRoom {
         }, {once: true});
 
         dc.onmessage = ev => {
-            this.serverMessage(ev);
+            this._serverMessage(ev);
         };
     }
 
     /**
      * Handler for RTC messages from the server.
      */
-    private async serverRTCMessage(msg: DataView) {
+    private async _serverRTCMessage(msg: DataView) {
         const pc = this._serverUnreliablePC;
         const p = prot.parts.rtc;
         const dataU8 = (new Uint8Array(msg.buffer)).subarray(p.data);
@@ -305,7 +305,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Handler for messages from the server.
      */
-    private serverMessage(ev: MessageEvent) {
+    private _serverMessage(ev: MessageEvent) {
         const msg = new DataView(ev.data);
         const peerId = msg.getUint16(0, true);
         const cmd = msg.getUint16(2, true);
@@ -328,7 +328,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             case prot.ids.rtc:
                 if (peerId === 65535 /* max u16 */) {
                     // Server
-                    this.serverRTCMessage(msg);
+                    this._serverRTCMessage(msg);
                 } else {
                     // Client
                     const peer = this._peers[peerId];
@@ -528,8 +528,8 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     // AbstractRoom methods
-    getOwnId() { return this._id; }
-    sendServer(msg: ArrayBuffer) {
+    override _getOwnId() { return this._id; }
+    override _sendServer(msg: ArrayBuffer) {
         if (this._serverReliable)
             this._serverReliable.send(msg);
     }

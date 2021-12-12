@@ -99,7 +99,7 @@ export class Peer {
                         this.id, prot.ids.rtc,
                         [[p.data, data]]
                     );
-                    this.room.sendServer(msg);
+                    this.room._sendServer(msg);
 
                 } catch (ex) {
                     console.error(ex);
@@ -121,7 +121,7 @@ export class Peer {
                     this.id, prot.ids.rtc,
                     [[p.data, data]]
                 );
-                this.room.sendServer(msg);
+                this.room._sendServer(msg);
             };
 
             // Incoming data channels
@@ -153,7 +153,7 @@ export class Peer {
                         p.length, this.id, prot.ids.peer,
                         [[p.status, 1, 0]]
                     );
-                    this.room.sendServer(msg);
+                    this.room._sendServer(msg);
                 }
             }, {once: true});
 
@@ -182,7 +182,7 @@ export class Peer {
                         p.length, this.id, prot.ids.peer,
                         [[p.status, 1, 0]]
                     );
-                    this.room.sendServer(msg);
+                    this.room._sendServer(msg);
                 }
             }, {once: true});
 
@@ -196,7 +196,7 @@ export class Peer {
                 p.length, this.id, prot.ids.peer,
                 [[p.status, 1, 1]]
             );
-            this.room.sendServer(msg);
+            this.room._sendServer(msg);
         }
     }
 
@@ -204,7 +204,7 @@ export class Peer {
      * Handler for incoming RTC negotiation messages from this user.
      */
     async rtcRecv(pkt: DataView) {
-        const selfId = this.room.getOwnId();
+        const selfId = this.room._getOwnId();
         const polite = selfId > this.id;
 
         // Get out the data
@@ -246,7 +246,7 @@ export class Peer {
                         this.id, prot.ids.rtc,
                         [[p.data, data]]
                     );
-                    this.room.sendServer(msg);
+                    this.room._sendServer(msg);
                 }
 
             } else if (msg.candidate) {
