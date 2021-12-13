@@ -111,8 +111,16 @@ export class VideoPlaybackCanvas extends VideoPlayback {
             }
         }
 
-        LibAVWebCodecs.canvasDrawImage(
-            this._ctx, frame, this._sl, this._st, this._sw, this._sh);
+        (async () => {
+            // Convert
+            const image = await LibAVWebCodecs.createImageBitmap(frame, {
+                resizeWidth: this._sw,
+                resizeHeight: this._sh
+            });
+
+            // And draw
+            this._ctx.drawImage(image, this._sl, this._st);
+        })();
     }
 
     override element() {

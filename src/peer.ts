@@ -671,11 +671,11 @@ export class Peer {
                 const track = this.tracks[chunk.trackIdx];
                 if (track.video) {
                     (<videoPlayback.VideoPlayback> track.player)
-                    .display(<wcp.VideoFrame> chunk.decoded);
+                        .display(<wcp.VideoFrame> chunk.decoded);
 
                 } else {
                     (<audioPlayback.AudioPlayback> track.player)
-                    .play(<Float32Array[]> chunk.decoded);
+                        .play(<Float32Array[]> chunk.decoded);
 
                 }
             })();

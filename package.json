@@ -21,7 +21,7 @@
   "license": "ISC",
   "dependencies": {
     "libav.js": "3.6.4",
-    "libavjs-webcodecs-polyfill": "^0.2.7"
+    "libavjs-webcodecs-polyfill": "^0.2.8"
   },
   "devDependencies": {
     "browserify": "^17.0.0",
