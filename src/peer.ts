@@ -296,7 +296,8 @@ export class Peer {
         this.data = [];
         this.offset = 0;
 
-        const tracks = this.tracks = info.map(() => new Track);
+        const tracks: Track[] = this.tracks =
+            info.map(() => new Track);
 
         this.room.emitEvent("stream-started", {
             peer: this.id
@@ -327,8 +328,7 @@ export class Peer {
                 };
                 let env: wcp.VideoDecoderEnvironment = null;
                 try {
-                    env = track.env =
-                        await LibAVWebCodecs.getVideoDecoder(config);
+                    env = await LibAVWebCodecs.getVideoDecoder(config);
                 } catch (ex) {}
                 if (!env) continue;
 
@@ -343,6 +343,7 @@ export class Peer {
 
                 // Set up the decoder
                 const dec = track.decoder = new Decoder();
+                dec.env = env;
                 dec.decoder = new env.VideoDecoder({
                     output: data => dec.output(data),
                     error: error => dec.error(error)
@@ -494,12 +495,14 @@ export class Peer {
             }
             idata.encoded[partIdx] = datau8.slice(offset.offset);
 
-            this.decodeMany();
-
-            if (!this.playing)
-                this.play();
-
         } catch (ex) {}
+
+        // Decode what we can
+        this.decodeMany();
+
+        // And play if we should
+        if (!this.playing)
+            this.play();
     }
 
     /**
@@ -509,6 +512,17 @@ export class Peer {
         for (const packet of this.data) {
             // If we don't have this packet, we can't decode past it
             if (!packet)
+                break;
+
+            // If this packet is incomplete, we can't decode it or past it
+            let complete = true;
+            for (const part of packet.encoded) {
+                if (!part) {
+                    complete = false;
+                    break;
+                }
+            }
+            if (!complete)
                 break;
 
             // If we're already decoding this packet, don't decode it again
@@ -577,7 +591,6 @@ export class Peer {
                     type: packet.key ? "key" : "delta",
                     timestamp: 0
                 });
-                console.log(chunk);
 
             }
 
@@ -701,9 +714,6 @@ export class Peer {
             // Make sure it's decoding/ed
             if (!chunk.decoding)
                 this.decodeOne(chunk, {force: true});
-
-            this.data.shift();
-            this.offset++;
 
             if (chunk.idealTimestamp < 0) {
                 chunk.idealTimestamp = performance.now();
