@@ -543,6 +543,14 @@ export class Peer {
             });
 
         }
+
+        // Only decode if it's not overloaded
+        if (decoder.decoder.decodeQueueSize > 1) {
+            packet.decodingRes();
+            return;
+        }
+
+        // Decode
         decoder.decoder.decode(chunk);
 
         // And receive it
@@ -652,20 +660,25 @@ export class Peer {
                     await new Promise(res => setTimeout(res, wait));
             }
 
-            // Make sure it's decoded
-            await chunk.decodingPromise;
+            // Decode and present it in the background
+            (async () => {
+                // Make sure it's decoded
+                await chunk.decodingPromise;
+                if (!chunk.decoded)
+                    return;
 
-            // And play it
-            const track = this.tracks[chunk.trackIdx];
-            if (track.video) {
-                (<videoPlayback.VideoPlayback> track.player)
+                // And play it
+                const track = this.tracks[chunk.trackIdx];
+                if (track.video) {
+                    (<videoPlayback.VideoPlayback> track.player)
                     .display(<wcp.VideoFrame> chunk.decoded);
 
-            } else {
-                (<audioPlayback.AudioPlayback> track.player)
+                } else {
+                    (<audioPlayback.AudioPlayback> track.player)
                     .play(<Float32Array[]> chunk.decoded);
 
-            }
+                }
+            })();
 
             // Set the time on the next relevant packet
             for (const next of this.data) {
