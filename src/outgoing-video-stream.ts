@@ -68,7 +68,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
             width: w,
             height: h,
             framerate: fr,
-            bitrate: h * 2500
+            bitrate: h * 2500,
+            latencyMode: "realtime"
         };
 
         // Create our VideoEncoder
