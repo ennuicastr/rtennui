@@ -160,7 +160,7 @@ export class VideoCaptureCanvas extends VideoCapture {
 
             let frame: wcp.VideoFrame = null;
             try {
-                const frame = new this.VideoFrame(video, {
+                frame = new this.VideoFrame(video, {
                     timestamp: ts
                 });
             } catch (ex) {}

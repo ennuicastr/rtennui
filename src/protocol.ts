@@ -88,7 +88,12 @@ export const protocol = {
         data: {
             length: 5, // + data
             info: 4, // key, stream idx, track idx
-            data: 5 // includes both the index and the actual data
+            data: 5
+            /* Format of data:
+             * index: network integer
+             * part: network integer
+             * part count: network integer
+             * data: ... */
         }
     }
 };

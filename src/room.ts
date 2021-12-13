@@ -31,6 +31,9 @@ declare let LibAVWebCodecs: typeof wcp;
 let encoders: string[] = null;
 let decoders: string[] = null;
 
+// Amount to send per packet
+const perPacket = 61440;
+
 /**
  * An RTEnnui connection, including all requisite server and peer connections.
  * Everything to do with the outgoing stream is also implemented here, because
@@ -540,24 +543,34 @@ export class Connection extends abstractRoom.AbstractRoom {
             (this._streamId << 4) |
             trackIdx;
 
-        // Make the message
+        // Get the data out
+        const datau8 = new Uint8Array(data.byteLength);
+        data.copyTo(datau8);
+
+        // Make and send the messages
         const p = prot.parts.data;
-        const netIntBytes = util.netIntBytes(packetIdx);
-        const msg = net.createPacket(
-            p.length + netIntBytes + data.byteLength,
-            this._id, prot.ids.data,
-            [
-                [p.info, 1, info],
-                [p.data, 0, packetIdx]
-                // Actual data copied specially
-            ]
-        );
+        const packetIdxBytes = util.netIntBytes(packetIdx);
+        const ct = Math.ceil(datau8.length / perPacket);
+        const ctBytes = util.netIntBytes(ct);
+        for (let i = 0; i < datau8.length; i += perPacket) {
+            const dataPart = datau8.subarray(i, i + perPacket);
+            const idxBytes = util.netIntBytes(i);
 
-        // Use the builtin copyTo
-        const msgu8 = new Uint8Array(msg);
-        data.copyTo(msgu8.subarray(p.data + netIntBytes));
+            const msg = net.createPacket(
+                p.length + packetIdxBytes + idxBytes + ctBytes +
+                dataPart.length,
+                this._id, prot.ids.data,
+                [
+                    [p.info, 1, info],
+                    [p.data, 0, packetIdx],
+                    [p.data + packetIdxBytes, 0, i],
+                    [p.data + packetIdxBytes + idxBytes, 0, ct],
+                    [p.data + packetIdxBytes + idxBytes + ctBytes, dataPart],
+                ]
+            );
 
-        this._sendData(msg, key);
+            this._sendData(msg, key);
+        }
     }
 
     /**

@@ -464,12 +464,12 @@ export class Peer {
 
             const datau8 = new Uint8Array(data.buffer);
             const offset = {offset: p.data};
-            const idx = util.decodeNetInt(datau8, offset);
+            const packetIdx = util.decodeNetInt(datau8, offset);
 
             if (this.data.length === 0)
-                this.offset = idx;
+                this.offset = packetIdx;
 
-            const idxOffset = idx - this.offset;
+            const idxOffset = packetIdx - this.offset;
 
             if (idxOffset < 0 || idxOffset >= 1024)
                 return;
@@ -477,10 +477,22 @@ export class Peer {
             while (this.data.length <= idxOffset)
                 this.data.push(null);
 
-            this.data[idxOffset] = new IncomingData(
-                trackIdx, idx, key, datau8.slice(offset.offset));
-            this.tracks[trackIdx].duration +=
-                this.stream[trackIdx].frameDuration;
+            const partIdx = util.decodeNetInt(datau8, offset);
+            const partCt = util.decodeNetInt(datau8, offset);
+
+            // Make the surrounding structure
+            let idata: IncomingData = this.data[idxOffset];
+            if (!idata) {
+                idata = this.data[idxOffset] =
+                    new IncomingData(trackIdx, packetIdx, key, partCt);
+                this.tracks[trackIdx].duration +=
+                    this.stream[trackIdx].frameDuration;
+            }
+            if (partCt !== idata.encoded.length) {
+                // ??? Inconsistent data!
+                return;
+            }
+            idata.encoded[partIdx] = datau8.slice(offset.offset);
 
             this.decodeMany();
 
@@ -519,9 +531,29 @@ export class Peer {
         const decoder = track.decoder;
         if (!decoder)
             return;
-        if (decoder.decoder.decodeQueueSize > 1 && !opts.force)
+        if (decoder.decoder.decodeQueueSize > 1) {
+            if (opts.force) {
+                // Just mark it as done
+                packet.decoding = true;
+                packet.decodingRes();
+            }
             return;
+        }
         packet.decoding = true;
+
+        // Function to unify the encoded parts
+        function unify() {
+            if (packet.encoded.length === 1)
+                return packet.encoded[0];
+            const ret = new Uint8Array(
+                packet.encoded.map(x => x.length).reduce((a, b) => a + b));
+            let idx = 0;
+            for (const part of packet.encoded) {
+                ret.set(part, idx);
+                idx += part.length;
+            }
+            return ret;
+        }
 
         // Send it for decoding
         let chunk: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk;
@@ -541,26 +573,21 @@ export class Peer {
             } else {
                 decoder.keyChunkRequired = false;
                 chunk = new decoder.env.EncodedVideoChunk({
-                    data: packet.encoded,
-                    type: <any> (packet.key ? "key" : "delta"),
+                    data: unify(),
+                    type: packet.key ? "key" : "delta",
                     timestamp: 0
                 });
+                console.log(chunk);
 
             }
 
         } else {
             chunk = new LibAVWebCodecs.EncodedAudioChunk({
-                data: packet.encoded,
-                type: <any> "key",
+                data: unify(),
+                type: "key",
                 timestamp: 0
             });
 
-        }
-
-        // Only decode if it's not overloaded
-        if (decoder.decoder.decodeQueueSize > 1) {
-            packet.decodingRes();
-            return;
         }
 
         // Decode
@@ -620,12 +647,26 @@ export class Peer {
         while (this.data.length) {
             const next = this.data.shift();
             this.offset++;
-            if (next) {
-                const track = this.tracks[next.trackIdx];
-                track.duration -= 
-                    this.stream[next.trackIdx].frameDuration;
-                return next;
+            if (!next)
+                continue;
+
+            const track = this.tracks[next.trackIdx];
+            track.duration -=
+                this.stream[next.trackIdx].frameDuration;
+
+            // next is set, but might be incomplete
+            let complete = true;
+            for (const part of next.encoded) {
+                if (!part) {
+                    complete = false;
+                    break;
+                }
             }
+            if (!complete)
+                continue;
+
+            // OK, this part is ready
+            return next;
         }
         return null;
     }
@@ -826,16 +867,22 @@ class IncomingData {
         public key: boolean,
 
         /**
-         * The raw data off the wire.
+         * The number of parts to expect.
          */
-        public encoded: BufferSource
+        partCt: number
     ) {
+        this.encoded = (new Array(partCt)).map(() => null);
         this.decoded = null;
         this.idealTimestamp = -1;
         this.decoding = false;
         this.decodingPromise =
             new Promise<void>(res => this.decodingRes = res);
     }
+
+    /**
+     * The input encoded data, possibly split into parts.
+     */
+    encoded: Uint8Array[];
 
     /**
      * The actual displayable data.
