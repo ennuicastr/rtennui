@@ -28,6 +28,7 @@ export class OutgoingVideoStream extends events.EventEmitter {
         public capture: videoCapture.VideoCapture
     ) {
         super();
+        this.format = null;
         this._ct = 0;
         this._ifreq = 0;
     }
@@ -35,16 +36,18 @@ export class OutgoingVideoStream extends events.EventEmitter {
     /**
      * Initialize this outgoing video stream and start it generating video.
      */
-    async init() {
-        this.capture.VideoFrame = LibAVWebCodecs.VideoFrame;
-
+    async init(format: string) {
         // Our video encoder configuration
         const w = this.capture.getWidth();
         const h = this.capture.getHeight();
         const fr = this.capture.getFramerate();
         this._ifreq = ~~(fr * 2);
-        const config: wcp.VideoEncoderConfig = {
-            codec: {libavjs:{
+        this.format = format;
+
+        // Convert to WebCodecs
+        let codec: any;
+        if (format === "vh263.2") {
+            codec = {libavjs:{
                 codec: "h263p",
                 ctx: {
                     pix_fmt: 0,
@@ -55,18 +58,26 @@ export class OutgoingVideoStream extends events.EventEmitter {
                     bit_rate: h * 2500,
                     bit_ratehi: 0
                 }
-            }},
+            }};
+        } else {
+            codec = format.slice(1);
+        }
+
+        const config: wcp.VideoEncoderConfig = {
+            codec,
             width: w,
             height: h,
-            framerate: fr
+            framerate: fr,
+            bitrate: h * 2500
         };
 
         // Create our VideoEncoder
         const env = this._env =
             await LibAVWebCodecs.getVideoEncoder(config);
+        this.capture.VideoFrame = env.VideoFrame;
 
         const encoder = this._encoder =
-            new LibAVWebCodecs.VideoEncoder({
+            new env.VideoEncoder({
                 output: data => {
                     this.emitEvent("data", data);
                 },
@@ -110,6 +121,9 @@ export class OutgoingVideoStream extends events.EventEmitter {
         this._encoder.encode(data, {keyFrame: key});
         data.close();
     }
+
+    // Format used
+    format: string;
 
     // Number of frames encoded since the last keyframe
     private _ct: number;

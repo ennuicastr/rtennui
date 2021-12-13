@@ -310,10 +310,27 @@ export class Peer {
             if (trackInfo.codec[0] === "v") {
                 // Video track
                 track.video = true;
-                if (trackInfo.codec !== "vh263p") {
-                    // Unsupported
-                    continue;
+
+                // Figure out the codec
+                let codec: any;
+                if (trackInfo.codec === "vh263.2") {
+                    codec = {libavjs:{
+                        codec: "h263p"
+                    }};
+                } else {
+                    codec = trackInfo.codec.slice(1);
                 }
+
+                // Find an environment
+                const config: wcp.VideoDecoderConfig = {
+                    codec
+                };
+                let env: wcp.VideoDecoderEnvironment = null;
+                try {
+                    env = track.env =
+                        await LibAVWebCodecs.getVideoDecoder(config);
+                } catch (ex) {}
+                if (!env) continue;
 
                 const player = track.player =
                     await videoPlayback.createVideoPlayback();
@@ -326,15 +343,11 @@ export class Peer {
 
                 // Set up the decoder
                 const dec = track.decoder = new Decoder();
-                dec.decoder = new LibAVWebCodecs.VideoDecoder({
+                dec.decoder = new env.VideoDecoder({
                     output: data => dec.output(data),
                     error: error => dec.error(error)
                 });
-                await dec.decoder.configure({
-                    codec: {libavjs:{
-                        codec: "h263p"
-                    }}
-                });
+                await dec.decoder.configure(config);
 
             } else if (trackInfo.codec[0] === "a") {
                 // Audio track
@@ -515,7 +528,7 @@ export class Peer {
         if (track.video) {
             if (decoder.keyChunkRequired && !packet.key) {
                 // Not decodable
-                packet.decoded = new LibAVWebCodecs.VideoFrame(
+                packet.decoded = new decoder.env.VideoFrame(
                     new Uint8Array(640 * 360 * 4), {
                     format: <any> "RGBA",
                     codedWidth: 640,
@@ -527,7 +540,7 @@ export class Peer {
 
             } else {
                 decoder.keyChunkRequired = false;
-                chunk = new LibAVWebCodecs.EncodedVideoChunk({
+                chunk = new decoder.env.EncodedVideoChunk({
                     data: packet.encoded,
                     type: <any> (packet.key ? "key" : "delta"),
                     timestamp: 0
@@ -672,6 +685,7 @@ export class Peer {
                 if (track.video) {
                     (<videoPlayback.VideoPlayback> track.player)
                         .display(<wcp.VideoFrame> chunk.decoded);
+                    (<wcp.VideoFrame> chunk.decoded).close();
 
                 } else {
                     (<audioPlayback.AudioPlayback> track.player)
@@ -855,6 +869,7 @@ class IncomingData {
 class Decoder {
     constructor() {
         this.keyChunkRequired = true;
+        this.env = null;
         this.decoder = null;
         this.waiters = [];
         this.buf = [];
@@ -891,6 +906,7 @@ class Decoder {
      */
     keyChunkRequired: boolean;
 
+    env: wcp.VideoDecoderEnvironment;
     decoder: wcp.AudioDecoder | wcp.VideoDecoder;
     waiters: (() => void)[];
     buf: (wcp.AudioData | wcp.VideoFrame)[];

@@ -93,7 +93,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                         codec: "h263p"
                     }}
                 });
-                dec.push("vh263p");
+                dec.push("vh263.2");
                 await LibAVWebCodecs.getVideoEncoder({
                     codec: {libavjs:{
                         codec: "h263p",
@@ -106,7 +106,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                     width: 640,
                     height: 480
                 });
-                enc.push("vh263p");
+                enc.push("vh263.2");
             } catch (ex) {}
 
             /* We don't use native WebCodecs for audio, so our support is
@@ -415,8 +415,21 @@ export class Connection extends abstractRoom.AbstractRoom {
      */
     async addVideoTrack(track: videoCapture.VideoCapture) {
         const stream = new outgoingVideoStream.OutgoingVideoStream(track);
+
+        // Choose a format
+        let format: string = null;
+        for (const opt of encoders) {
+            if (!this._formats || this._formats.indexOf(opt) >= 0) {
+                format = opt;
+                break;
+            }
+        }
+        if (!format)
+            throw new Error("No supported video format found!");
+
+        // Initialize the stream
+        await stream.init(format);
         this._videoTracks.push(stream);
-        await stream.init();
         stream.on("data", data => this._onOutgoingData(stream, data));
         stream.on("error", error => this._onOutgoingError(stream, error));
         this._newOutgoingStream();
@@ -427,8 +440,8 @@ export class Connection extends abstractRoom.AbstractRoom {
      */
     async addAudioTrack(track: audioCapture.AudioCapture) {
         const stream = new outgoingAudioStream.OutgoingAudioStream(track);
-        this._audioTracks.push(stream);
         await stream.init();
+        this._audioTracks.push(stream);
         stream.on("data", data => this._onOutgoingData(stream, data));
         stream.on("error", error => this._onOutgoingError(stream, error));
         this._newOutgoingStream();
@@ -474,7 +487,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Get our track listing
         const tracks = []
             .concat(this._videoTracks.map(x => ({
-                codec: "vh263p",
+                codec: x.format,
                 frameDuration: ~~(1000000 / x.capture.getFramerate())
             })))
             .concat(this._audioTracks.map(x => ({

@@ -158,9 +158,14 @@ export class VideoCaptureCanvas extends VideoCapture {
             if (!this.VideoFrame)
                 return;
 
-            const frame = new this.VideoFrame(video, {
-                timestamp: ts
-            });
+            let frame: wcp.VideoFrame = null;
+            try {
+                const frame = new this.VideoFrame(video, {
+                    timestamp: ts
+                });
+            } catch (ex) {}
+            if (!frame)
+                return;
             ts += tsStep;
             this.emitEvent("data", frame);
         }, ~~(1000 / fr));
