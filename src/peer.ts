@@ -447,7 +447,7 @@ export class Peer {
             if (streamId !== this.streamId)
                 return;
             const key = !!(info & 0x80);
-            const trackIdx = info & 0x08;
+            const trackIdx = info & 0x0F;
 
             const datau8 = new Uint8Array(data.buffer);
             const offset = {offset: p.data};
