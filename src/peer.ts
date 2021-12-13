@@ -128,6 +128,7 @@ export class Peer {
             // Incoming data channels
             peer.ondatachannel = ev => {
                 const chan = ev.channel;
+                chan.binaryType = "arraybuffer";
                 if (chan.label === "reliable")
                     chan.onmessage = ev => this.onMessage(ev, true);
                 else
