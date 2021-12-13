@@ -50,7 +50,7 @@ export abstract class AudioCapture extends events.EventEmitter {
                 this.close();
         };
 
-        const ret = (new Array(ct)).map(() =>
+        const ret = Array(ct).fill(null).map(() =>
             new AudioCaptureTee());
 
         for (const tee of ret) {

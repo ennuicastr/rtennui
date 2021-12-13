@@ -48,7 +48,7 @@ export abstract class VideoCapture extends events.EventEmitter {
                 this.close();
         };
 
-        const ret = (new Array(ct)).map(() =>
+        const ret = Array(ct).fill(null).map(() =>
             new VideoCaptureTee(this));
 
         for (const tee of ret) {

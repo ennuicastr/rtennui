@@ -881,7 +881,7 @@ class IncomingData {
          */
         partCt: number
     ) {
-        this.encoded = (new Array(partCt)).map(() => null);
+        this.encoded = Array(partCt).fill(null);
         this.decoded = null;
         this.idealTimestamp = -1;
         this.decoding = false;
