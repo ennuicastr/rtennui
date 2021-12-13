@@ -100,7 +100,7 @@ export class OutgoingVideoStream extends events.EventEmitter {
      * Input from the video capture.
      */
     private _oninput(data: wcp.VideoFrame) {
-        if (!this._encoder)
+        if (!this._encoder || this._encoder.encodeQueueSize > 1)
             return;
         let key = false;
         if (++this._ct >= this._ifreq) {
