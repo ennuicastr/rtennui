@@ -77,7 +77,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             let enc = [];
             let dec = [];
 
-            for (const codec of ["no.vp09.0.51.8", "no.vp8"]) {
+            for (const codec of ["no.vp09.0.51.8", "vp8"]) {
                 try {
                     await LibAVWebCodecs.getVideoDecoder({codec});
                     dec.push("v" + codec);
