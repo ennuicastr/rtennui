@@ -750,7 +750,6 @@ export class Peer {
                 if (track.video) {
                     (<videoPlayback.VideoPlayback> track.player)
                         .display(<wcp.VideoFrame> chunk.decoded);
-                    (<wcp.VideoFrame> chunk.decoded).close();
 
                 } else {
                     (<audioPlayback.AudioPlayback> track.player)

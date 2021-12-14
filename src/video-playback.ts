@@ -56,8 +56,6 @@ export class VideoPlaybackCanvas extends VideoPlayback {
     }
 
     override display(frame: wcp.VideoFrame) {
-        frame = frame.clone();
-
         const canvas = this._canvas;
         const ctx = this._ctx;
 
@@ -119,7 +117,6 @@ export class VideoPlaybackCanvas extends VideoPlayback {
                 resizeWidth: this._sw,
                 resizeHeight: this._sh
             });
-            frame.close();
 
             // And draw
             this._ctx.drawImage(image, this._sl, this._st);
