@@ -50,14 +50,18 @@ export class VideoPlaybackCanvas extends VideoPlayback {
     constructor() {
         super();
         const canvas = this._canvas = document.createElement("canvas");
-        this._ctx = canvas.getContext("2d");
+
+        // Find the best context
+        const ctxib = this._ctxib = canvas.getContext("bitmaprenderer");
+        if (!ctxib)
+            this._ctx2d = canvas.getContext("2d");
+
         this._iw = this._ih = this._sl = this._st = this._sw = this._sh =
             this._ow = this._oh = 0;
     }
 
     override display(frame: wcp.VideoFrame) {
         const canvas = this._canvas;
-        const ctx = this._ctx;
 
         if (!canvas.parentNode) {
             // Not visible, don't draw
@@ -73,7 +77,8 @@ export class VideoPlaybackCanvas extends VideoPlayback {
             canvas.width = ~~w;
             const h = this._oh = canvas.offsetHeight;
             canvas.height = ~~h;
-            ctx.clearRect(0, 0, w, h);
+            if (this._ctx2d)
+                this._ctx2d.clearRect(0, 0, w, h);
             changedSize = true;
         }
 
@@ -117,9 +122,13 @@ export class VideoPlaybackCanvas extends VideoPlayback {
                 resizeWidth: this._sw,
                 resizeHeight: this._sh
             });
+            frame.close();
 
             // And draw
-            this._ctx.drawImage(image, this._sl, this._st);
+            if (this._ctxib)
+                this._ctxib.transferFromImageBitmap(image);
+            else
+                this._ctx2d.drawImage(image, this._sl, this._st);
         })();
     }
 
@@ -137,9 +146,14 @@ export class VideoPlaybackCanvas extends VideoPlayback {
     private _canvas: HTMLCanvasElement;
 
     /**
-     * The context for the canvas.
+     * The ImageBitmap context for the canvas, if applicable.
      */
-    private _ctx: CanvasRenderingContext2D;
+    private _ctxib: ImageBitmapRenderingContext;
+
+    /**
+     * The 2D context for the canvas.
+     */
+    private _ctx2d: CanvasRenderingContext2D;
 
     private _iw: number;
     private _ih: number;
