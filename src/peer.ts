@@ -658,14 +658,12 @@ export class Peer {
      */
     shift() {
         while (this.data.length) {
-            const next = this.data.shift();
-            this.offset++;
-            if (!next)
+            const next: IncomingData = this.data[0];
+            if (!next) {
+                this.data.shift();
+                this.offset++;
                 continue;
-
-            const track = this.tracks[next.trackIdx];
-            track.duration -=
-                this.stream[next.trackIdx].frameDuration;
+            }
 
             // next is set, but might be incomplete
             let complete = true;
@@ -675,6 +673,21 @@ export class Peer {
                     break;
                 }
             }
+
+            /*
+            if (!complete && next.key) {
+                // Can't skip keyframes
+                return null;
+            }
+            */
+
+            // We're either displaying it or skipping it, so shift it
+            this.data.shift();
+            this.offset++;
+            const track = this.tracks[next.trackIdx];
+            track.duration -=
+                this.stream[next.trackIdx].frameDuration;
+
             if (!complete)
                 continue;
 
@@ -699,7 +712,8 @@ export class Peer {
             // Do we have too much data?
             while (Math.max.apply(Math, this.tracks.map(x => x.duration)) >= 200000
                    /* FIXME: Magic number */) {
-                this.shift();
+                if (!this.shift())
+                    break;
             }
 
             // Get a chunk

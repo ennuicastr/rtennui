@@ -550,11 +550,12 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Make and send the messages
         const p = prot.parts.data;
         const packetIdxBytes = util.netIntBytes(packetIdx);
+        let idx = 0;
         const ct = Math.ceil(datau8.length / perPacket);
         const ctBytes = util.netIntBytes(ct);
         for (let i = 0; i < datau8.length; i += perPacket) {
             const dataPart = datau8.subarray(i, i + perPacket);
-            const idxBytes = util.netIntBytes(i);
+            const idxBytes = util.netIntBytes(idx);
 
             const msg = net.createPacket(
                 p.length + packetIdxBytes + idxBytes + ctBytes +
@@ -563,13 +564,15 @@ export class Connection extends abstractRoom.AbstractRoom {
                 [
                     [p.info, 1, info],
                     [p.data, 0, packetIdx],
-                    [p.data + packetIdxBytes, 0, i],
+                    [p.data + packetIdxBytes, 0, idx],
                     [p.data + packetIdxBytes + idxBytes, 0, ct],
                     [p.data + packetIdxBytes + idxBytes + ctBytes, dataPart],
                 ]
             );
 
             this._sendData(msg, key);
+
+            idx++;
         }
     }
 
