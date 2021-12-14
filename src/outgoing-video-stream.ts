@@ -38,8 +38,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
      */
     async init(format: string) {
         // Our video encoder configuration
-        const w = this.capture.getWidth();
-        const h = this.capture.getHeight();
+        let w = this.capture.getWidth();
+        let h = this.capture.getHeight();
         const fr = this.capture.getFramerate();
         this._ifreq = ~~(fr * 2);
         this.format = format;
@@ -76,6 +76,22 @@ export class OutgoingVideoStream extends events.EventEmitter {
         const env = this._env =
             await LibAVWebCodecs.getVideoEncoder(config);
         this.capture.VideoFrame = env.VideoFrame;
+
+        // If we're using the polyfill, don't go above 360p
+        if (env.VideoEncoder === LibAVWebCodecs.VideoEncoder) {
+            if (h > 360) {
+                w = Math.round((w / h) * 360 / 8) * 8;
+                h = 360;
+                config.width = w;
+                config.height = h;
+                config.bitrate = h * 2500;
+                if (codec.libavjs) {
+                    codec.libavjs.ctx.width = w;
+                    codec.libavjs.ctx.height = h;
+                    codec.libavjs.bit_rate = h * 2500;
+                }
+            }
+        }
 
         const encoder = this._encoder =
             new env.VideoEncoder({
