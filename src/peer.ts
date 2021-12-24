@@ -368,16 +368,18 @@ export class Peer {
                 });
 
                 // Set up the decoder
-                const dec = track.decoder = new Decoder();
-                dec.decoder = new LibAVWebCodecs.AudioDecoder({
-                    output: data => dec.output(data),
-                    error: error => dec.error(error)
-                });
-                await dec.decoder.configure({
+                const config: wcp.AudioDecoderConfig = {
                     codec: "opus",
                     sampleRate: 48000,
                     numberOfChannels: 1
+                };
+                const dec = track.decoder = new Decoder();
+                const env = dec.env = await LibAVWebCodecs.getAudioDecoder(config);
+                dec.decoder = new env.AudioDecoder({
+                    output: data => dec.output(data),
+                    error: error => dec.error(error)
                 });
+                await dec.decoder.configure(config);
 
                 // Set up the resampler
                 const pChannels = player.channels();
@@ -574,7 +576,8 @@ export class Peer {
         if (track.video) {
             if (decoder.keyChunkRequired && !packet.key) {
                 // Not decodable
-                packet.decoded = new decoder.env.VideoFrame(
+                packet.decoded = new (<wcp.VideoDecoderEnvironment>
+                                      decoder.env).VideoFrame(
                     new Uint8Array(640 * 360 * 4), {
                     format: <any> "RGBA",
                     codedWidth: 640,
@@ -586,7 +589,8 @@ export class Peer {
 
             } else {
                 decoder.keyChunkRequired = false;
-                chunk = new decoder.env.EncodedVideoChunk({
+                chunk = new (<wcp.VideoDecoderEnvironment>
+                             decoder.env).EncodedVideoChunk({
                     data: unify(),
                     type: packet.key ? "key" : "delta",
                     timestamp: 0
@@ -595,7 +599,8 @@ export class Peer {
             }
 
         } else {
-            chunk = new LibAVWebCodecs.EncodedAudioChunk({
+            chunk = new (<wcp.AudioDecoderEnvironment>
+                         decoder.env).EncodedAudioChunk({
                 data: unify(),
                 type: "key",
                 timestamp: 0
@@ -978,7 +983,7 @@ class Decoder {
      */
     keyChunkRequired: boolean;
 
-    env: wcp.VideoDecoderEnvironment;
+    env: wcp.AudioDecoderEnvironment | wcp.VideoDecoderEnvironment;
     decoder: wcp.AudioDecoder | wcp.VideoDecoder;
     waiters: (() => void)[];
     buf: (wcp.AudioData | wcp.VideoFrame)[];
