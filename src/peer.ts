@@ -748,8 +748,10 @@ export class Peer {
                 // And play it
                 const track = this.tracks[chunk.trackIdx];
                 if (track.video) {
+                    const frame = <wcp.VideoFrame> chunk.decoded;
                     (<videoPlayback.VideoPlayback> track.player)
-                        .display(<wcp.VideoFrame> chunk.decoded);
+                        .display(frame)
+                        .then(() => frame.close());
 
                 } else {
                     (<audioPlayback.AudioPlayback> track.player)

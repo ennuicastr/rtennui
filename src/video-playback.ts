@@ -30,7 +30,7 @@ export abstract class VideoPlayback extends events.EventEmitter {
     /**
      * Display this frame.
      */
-    abstract display(frame: wcp.VideoFrame): void;
+    abstract display(frame: wcp.VideoFrame): Promise<void>;
 
     /**
      * Get the underlying HTML element.
@@ -60,7 +60,7 @@ export class VideoPlaybackCanvas extends VideoPlayback {
             this._ow = this._oh = 0;
     }
 
-    override display(frame: wcp.VideoFrame) {
+    override async display(frame: wcp.VideoFrame) {
         const canvas = this._canvas;
 
         if (!canvas.parentNode) {
@@ -116,20 +116,17 @@ export class VideoPlaybackCanvas extends VideoPlayback {
             }
         }
 
-        (async () => {
-            // Convert
-            const image = await LibAVWebCodecs.createImageBitmap(frame, {
-                resizeWidth: this._sw,
-                resizeHeight: this._sh
-            });
-            frame.close();
+        // Convert
+        const image = await LibAVWebCodecs.createImageBitmap(frame, {
+            resizeWidth: this._sw,
+            resizeHeight: this._sh
+        });
 
-            // And draw
-            if (this._ctxib)
-                this._ctxib.transferFromImageBitmap(image);
-            else
-                this._ctx2d.drawImage(image, this._sl, this._st);
-        })();
+        // And draw
+        if (this._ctxib)
+            this._ctxib.transferFromImageBitmap(image);
+        else
+            this._ctx2d.drawImage(image, this._sl, this._st);
     }
 
     override element() {
