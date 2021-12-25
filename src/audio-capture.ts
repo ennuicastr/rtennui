@@ -21,13 +21,30 @@ import * as events from "./events";
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
 /**
+ * VAD state.
+ */
+export type VADState =
+    "no" | "maybe" | "yes";
+
+/**
  * General interface for any audio capture subsystem, user-implementable.
  */
 export abstract class AudioCapture extends events.EventEmitter {
     constructor() {
         super();
-        this.AudioData = null;
+        this._AudioData = null;
     }
+
+    /**
+     * Get the current VAD state. Must also send a "vad" event when this
+     * changes.
+     */
+    getVADState(): VADState { return "yes"; }
+
+    /**
+     * Set the AudioData type.
+     */
+    setAudioData(to: typeof wcp.AudioData) { this._AudioData = to; }
 
     /**
      * Stop this audio capture and remove any underlying data.
@@ -38,7 +55,7 @@ export abstract class AudioCapture extends events.EventEmitter {
      * "Tee" this capture into the number of receivers specified.
      */
     tee(ct: number): AudioCapture[] {
-        if (!this.AudioData) {
+        if (!this._AudioData) {
             // This needs to be set first
             throw new Error("AudioData must be set before tee");
         }
@@ -51,12 +68,24 @@ export abstract class AudioCapture extends events.EventEmitter {
         };
 
         const ret = Array(ct).fill(null).map(() =>
-            new AudioCaptureTee());
+            new AudioCaptureTee(this));
+
+        const onsetaudiodata = (to: typeof wcp.AudioData) => {
+            this.setAudioData(to);
+            for (const tee of ret)
+                tee._AudioData = this._AudioData;
+        };
 
         for (const tee of ret) {
-            tee.AudioData = this.AudioData;
+            tee._AudioData = this._AudioData;
             tee.onclose = onclose;
+            tee.onsetaudiodata = onsetaudiodata;
         }
+
+        this.on("vad", () => {
+            for (const tee of ret)
+                tee.emitEvent("vad", null);
+        });
 
         this.on("data", data => {
             for (let i = 0; i < ct - 1; i++) {
@@ -73,15 +102,22 @@ export abstract class AudioCapture extends events.EventEmitter {
     /**
      * AudioData type to be used by captured audio, set by the user.
      */
-    AudioData?: typeof wcp.AudioData;
+    protected _AudioData: typeof wcp.AudioData;
 }
 
 /**
  * Tee'd audio capture.
  */
 export class AudioCaptureTee extends AudioCapture {
-    constructor() {
+    constructor(public readonly parent: AudioCapture) {
         super();
+    }
+
+    override getVADState() { return this.parent.getVADState(); }
+
+    override setAudioData(to: typeof wcp.AudioData) {
+        if (this.onsetaudiodata)
+            this.onsetaudiodata(to);
     }
 
     close() {
@@ -90,6 +126,7 @@ export class AudioCaptureTee extends AudioCapture {
     }
 
     onclose?: () => void;
+    onsetaudiodata?: (to: typeof wcp.AudioData) => void;
 }
 
 /**
@@ -140,7 +177,7 @@ export class AudioCaptureAWP extends AudioCapture {
         const msg = ev.data;
         if (msg.length) {
             // It's raw data
-            if (!this.AudioData)
+            if (!this._AudioData)
                 return;
 
             // Put it into a single buffer
@@ -153,7 +190,7 @@ export class AudioCaptureAWP extends AudioCapture {
             }
 
             // Convert to an AudioData
-            const ad = new this.AudioData({
+            const ad = new this._AudioData({
                 format: <any> "f32-planar",
                 sampleRate: this._ac.sampleRate,
                 numberOfFrames: msg[0].length,
@@ -184,7 +221,7 @@ export class AudioCaptureAWP extends AudioCapture {
      * Sent when shared buffers get new data.
      */
     private _onwaiter(ev: MessageEvent) {
-        if (!this.AudioData)
+        if (!this._AudioData)
             return;
 
         // Put it into a single buffer
@@ -220,7 +257,7 @@ export class AudioCaptureAWP extends AudioCapture {
         }
 
         // Convert to an AudioData
-        const ad = new this.AudioData({
+        const ad = new this._AudioData({
             format: <any> "f32-planar",
             sampleRate: this._ac.sampleRate,
             numberOfFrames: frames,
@@ -296,11 +333,11 @@ export class AudioCaptureSP extends AudioCapture {
         const sp = this._sp =
             _ac.createScriptProcessor(1024, 1, 1);
         sp.onaudioprocess = ev => {
-            if (!this.AudioData)
+            if (!this._AudioData)
                 return;
 
             const data = ev.inputBuffer.getChannelData(0);
-            const ad = new this.AudioData({
+            const ad = new this._AudioData({
                 format: <any> "f32-planar",
                 sampleRate: sampleRate,
                 numberOfFrames: data.length,

@@ -707,10 +707,15 @@ export class Peer {
      * method will do nothing unless there's enough input data.
      */
     async play() {
-        // Should we be playing?
-        if (Math.max.apply(Math, this.tracks.map(x => x.duration)) < 100000
-            /* FIXME: Magic number */)
-            return;
+        /* Set the ideal start time on the first packet to 100ms from now for
+         * buffering time */
+        for (const chunk of this.data) {
+            if (!chunk)
+                continue;
+            chunk.idealTimestamp = performance.now() + 100;
+            break;
+        }
+
         this.playing = true;
 
         while (true) {

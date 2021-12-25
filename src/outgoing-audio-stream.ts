@@ -28,6 +28,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
         public capture: audioCapture.AudioCapture
     ) {
         super();
+        this._sentZeroFrames = 0;
     }
 
     /**
@@ -36,7 +37,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
     async init() {
         /* NOTE: We never use native WebCodecs, because we need to be able to
          * set the frame size. */
-        this.capture.AudioData = LibAVWebCodecs.AudioData;
+        this.capture.setAudioData(LibAVWebCodecs.AudioData);
 
         // Create our AudioEncoder
         const encoder = this._encoder =
@@ -91,10 +92,34 @@ export class OutgoingAudioStream extends events.EventEmitter {
     private _oninput(data: wcp.AudioData) {
         if (!this._encoder)
             return;
-        this._encoder.encode(data);
+        if (this.capture.getVADState() === "no") {
+            // Maybe send a zero frame
+            if (this._sentZeroFrames < 3) {
+                const zeroData = new LibAVWebCodecs.AudioData({
+                    format: "f32-planar",
+                    sampleRate: 48000,
+                    numberOfFrames: 960,
+                    numberOfChannels: 1,
+                    timestamp: data.timestamp,
+                    data: new Float32Array(960)
+                });
+                this._encoder.encode(zeroData);
+                this._sentZeroFrames++;
+                zeroData.close();
+            }
+
+        } else {
+            this._encoder.encode(data);
+            this._sentZeroFrames = 0;
+
+        }
+
         data.close();
     }
 
     // Underlying encoder
     private _encoder: wcp.AudioEncoder;
+
+    // Number of zero frames we've sent if the VAD is off
+    private _sentZeroFrames: number;
 }
