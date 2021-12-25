@@ -21,6 +21,16 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
 /**
+ * Options for an outgoing audio stream.
+ */
+export interface OutgoingAudioStreamOptions {
+    /**
+     * Frame size in microseconds.
+     */
+    frameSize?: number;
+}
+
+/**
  * An outgoing audio stream.
  */
 export class OutgoingAudioStream extends events.EventEmitter {
@@ -29,12 +39,18 @@ export class OutgoingAudioStream extends events.EventEmitter {
     ) {
         super();
         this._sentZeroFrames = 0;
+        this._frameSize = 0;
     }
 
     /**
      * Initialize this outgoing audio stream and start it generating audio.
      */
-    async init() {
+    async init(opts: OutgoingAudioStreamOptions = {}) {
+        // Get the frame size into something Opus can handle
+        let frameSize = opts.frameSize || 20000;
+        frameSize = Math.min(Math.ceil(frameSize / 2500) * 2500, 120000);
+        this._frameSize = frameSize = ~~(frameSize * 48 / 1000);
+
         /* NOTE: We never use native WebCodecs, because we need to be able to
          * set the frame size. */
         this.capture.setAudioData(LibAVWebCodecs.AudioData);
@@ -57,7 +73,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
                 ctx: {
                     sample_fmt: 3 /* FLT */,
                     sample_rate: 48000,
-                    frame_size: 960,
+                    frame_size: frameSize,
                     channel_layout: 4 /* mono */,
                     bit_rate: 64000,
                     bit_ratehi: 0
@@ -101,7 +117,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
                     numberOfFrames: 960,
                     numberOfChannels: 1,
                     timestamp: data.timestamp,
-                    data: new Float32Array(960)
+                    data: new Float32Array(this._frameSize)
                 });
                 this._encoder.encode(zeroData);
                 this._sentZeroFrames++;
@@ -122,4 +138,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
 
     // Number of zero frames we've sent if the VAD is off
     private _sentZeroFrames: number;
+
+    // Frame size of the encoder in samples
+    private _frameSize: number;
 }

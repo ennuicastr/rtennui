@@ -15,6 +15,7 @@
  */
 
 import * as audioCapture from "./audio-capture";
+import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as peer from "./peer";
 import {protocol as prot} from "./protocol";
 import * as room from "./room";
@@ -28,6 +29,9 @@ export async function load() {
 export type AudioCapture = audioCapture.AudioCapture;
 export const AudioCapture = audioCapture.AudioCapture;
 export const createAudioCapture = audioCapture.createAudioCapture;
+
+export type OutgoingAudioStreamOptions =
+    outgoingAudioStream.OutgoingAudioStreamOptions;
 
 export type Connection = room.Connection;
 export const Connection = room.Connection;

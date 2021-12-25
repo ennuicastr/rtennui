@@ -441,9 +441,12 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Add an outgoing audio track.
      */
-    async addAudioTrack(track: audioCapture.AudioCapture) {
+    async addAudioTrack(
+        track: audioCapture.AudioCapture,
+        opts: outgoingAudioStream.OutgoingAudioStreamOptions = {}
+    ) {
         const stream = new outgoingAudioStream.OutgoingAudioStream(track);
-        await stream.init();
+        await stream.init(opts);
         this._audioTracks.push(stream);
         stream.on("data", data => this._onOutgoingData(stream, data));
         stream.on("error", error => this._onOutgoingError(stream, error));
