@@ -2,5 +2,22 @@
     "compilerOptions": {
         "target": "es5",
         "lib": ["es6", "es2015.promise", "dom"]
+    },
+    "files": [
+        "src/main.ts"
+    ],
+    "typedocOptions": {
+        "entryPoints": [
+            "src/main.ts",
+            "src/abstract-room.ts",
+            "src/audio-capture.ts",
+            "src/events.ts",
+            "src/outgoing-audio-stream.ts",
+            "src/outgoing-video-stream.ts",
+            "src/peer.ts",
+            "src/room.ts",
+            "src/video-capture.ts"
+        ],
+        "out": "doc"
     }
 }

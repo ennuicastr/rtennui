@@ -22,6 +22,7 @@ declare let LibAVWebCodecs: typeof wcp;
 
 /**
  * An outgoing video stream.
+ * @private
  */
 export class OutgoingVideoStream extends events.EventEmitter {
     constructor(
@@ -35,6 +36,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
 
     /**
      * Initialize this outgoing video stream and start it generating video.
+     * @private
+     * @param format  Video format.
      */
     async init(format: string) {
         // Our video encoder configuration
@@ -112,6 +115,7 @@ export class OutgoingVideoStream extends events.EventEmitter {
 
     /**
      * Close this stream.
+     * @private
      */
     async close() {
         this.capture.close();
@@ -139,18 +143,29 @@ export class OutgoingVideoStream extends events.EventEmitter {
         data.close();
     }
 
-    // Format used
+    /**
+     * Format used.
+     * @private
+     */
     format: string;
 
-    // Number of frames encoded since the last keyframe
+    /**
+     * Number of frames encoded since the last keyframe.
+     */
     private _ct: number;
 
-    // Number of frames per keyframe;
+    /**
+     * Number of frames per keyframe.
+     */
     private _ifreq: number;
 
-    // Underlying encoder environment
+    /**
+     * Underlying encoder environment.
+     */
     private _env: wcp.VideoEncoderEnvironment;
 
-    // Underlying encoder
+    /**
+     * Underlying encoder.
+     */
     private _encoder: wcp.VideoEncoder;
 }

@@ -86,6 +86,7 @@ export class AudioPlaybackAWP extends AudioPlayback {
 
     /**
      * Play this audio.
+     * @param data  Audio to play.
      */
     play(data: Float32Array[]) {
         this._worklet.port.postMessage(data, data.map(x => x.buffer));

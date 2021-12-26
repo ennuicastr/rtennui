@@ -53,6 +53,7 @@ export abstract class AudioCapture extends events.EventEmitter {
 
     /**
      * "Tee" this capture into the number of receivers specified.
+     * @param ct  Number of duplicates to make.
      */
     tee(ct: number): AudioCapture[] {
         if (!this._AudioData) {
@@ -101,6 +102,7 @@ export abstract class AudioCapture extends events.EventEmitter {
 
     /**
      * AudioData type to be used by captured audio, set by the user.
+     * @private
      */
     protected _AudioData: typeof wcp.AudioData;
 }
@@ -120,7 +122,7 @@ export class AudioCaptureTee extends AudioCapture {
             this.onsetaudiodata(to);
     }
 
-    close() {
+    override close() {
         if (this.onclose)
             this.onclose();
     }
@@ -371,6 +373,8 @@ export class AudioCaptureSP extends AudioCapture {
 
 /**
  * Create an appropriate audio capture from an AudioContext and a MediaStream.
+ * @param ac  The AudioContext for the nodes.
+ * @param ms  The MediaStream from which to create a capture.
  */
 export async function createAudioCapture(
     ac: AudioContext, ms: MediaStream

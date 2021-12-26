@@ -28,6 +28,7 @@ declare let LibAVWebCodecs: typeof wcp;
 
 /**
  * A single libav instance used to resample.
+ * @private
  */
 let resampler: libavT.LibAV = null;
 
@@ -37,6 +38,7 @@ export async function load() {
 
 /**
  * A single peer.
+ * @private
  */
 export class Peer {
     constructor(
@@ -64,6 +66,7 @@ export class Peer {
 
     /**
      * Disconnect/close/shut down this user.
+     * @private
      */
     async close() {
         await this.closeStream();
@@ -75,6 +78,7 @@ export class Peer {
 
     /**
      * Establish peer-to-peer connections.
+     * @private
      */
     async p2p() {
         // Create the RTCPeerConnection
@@ -204,6 +208,8 @@ export class Peer {
 
     /**
      * Handler for incoming RTC negotiation messages from this user.
+     * @private
+     * @param pkt  Received packet.
      */
     async rtcRecv(pkt: DataView) {
         const selfId = this.room._getOwnId();
@@ -269,6 +275,9 @@ export class Peer {
 
     /**
      * Handler for incoming messages from this peer.
+     * @private
+     * @param ev  Event containing the received message.
+     * @param reliable  True if this was sent over a reliable connection.
      */
     onMessage(ev: MessageEvent<ArrayBuffer>, reliable: boolean) {
         const msg = new DataView(ev.data);
@@ -285,6 +294,10 @@ export class Peer {
 
     /**
      * Initialize this peer's incoming data with a new stream.
+     * @private
+     * @param ac  AudioContext on which to play the stream.
+     * @param id  ID of the stream.
+     * @param info  Track info given by the peer.
      */
     async newStream(ac: AudioContext, id: number, info: any) {
         const self = this;
@@ -408,6 +421,7 @@ export class Peer {
 
     /**
      * Close this peer's stream.
+     * @private
      */
     async closeStream() {
         if (this.streamId < 0)
@@ -454,6 +468,8 @@ export class Peer {
 
     /**
      * Called when data for this peer is received.
+     * @private
+     * @param data  Received data packet.
      */
     recv(data: DataView) {
         try {
@@ -509,6 +525,7 @@ export class Peer {
 
     /**
      * Decode as much as is reasonable of the input.
+     * @private
      */
     decodeMany() {
         for (const packet of this.data) {
@@ -537,6 +554,10 @@ export class Peer {
 
     /**
      * Decode a single packet.
+     * @private
+     * @param packet  Packet to decode.
+     * @param opts  Options for decoding, in particular whether to force
+     *              decoding, possibly overloading the decoder.
      */
     decodeOne(packet: IncomingData, opts: {
         force?: boolean
@@ -660,6 +681,7 @@ export class Peer {
 
     /**
      * Get the next packet of data.
+     * @private
      */
     shift() {
         while (this.data.length) {
@@ -705,6 +727,7 @@ export class Peer {
     /**
      * Play or continue playing the stream. If not currently playing, this
      * method will do nothing unless there's enough input data.
+     * @private
      */
     async play() {
         /* Set the ideal start time on the first packet to 100ms from now for
@@ -783,62 +806,74 @@ export class Peer {
 
     /**
      * The stream we're currently receiving from this peer, if any.
+     * @private
      */
     streamId: number;
 
     /**
      * True if the current stream is actually playing right now.
+     * @private
      */
     playing: boolean;
 
     /**
      * The stream information.
+     * @private
      */
     stream: any[];
 
     /**
      * Incoming data.
+     * @private
      */
     data: IncomingData[];
 
     /**
-     * Offset of the data (i.e., index of the first packet)
+     * Offset of the data (i.e., index of the first packet).
+     * @private
      */
     offset: number;
 
     /**
      * Each track's information.
+     * @private
      */
     tracks: Track[];
 
     /**
      * The RTC connection to this peer.
+     * @private
      */
     rtc: RTCPeerConnection;
 
     /**
      * Perfect negotiation: Are we making an offer?
+     * @private
      */
     rtcMakingOffer: boolean;
 
     /**
      * Perfect negotiation: Are we ignoring offers?
+     * @private
      */
     rtcIgnoreOffer: boolean;
 
     /**
      * The reliable connection to this peer.
+     * @private
      */
     reliable: RTCDataChannel;
 
     /**
      * The unreliable connection to this peer.
+     * @private
      */
     unreliable: RTCDataChannel;
 }
 
 /**
  * An individual track within a peer's stream.
+ * @private
  */
 class Track {
     constructor() {
@@ -852,52 +887,62 @@ class Track {
 
     /**
      * Is this a video track?
+     * @private
      */
     video: boolean;
 
     /**
      * The duration of data that we have for this track.
+     * @private
      */
     duration: number;
 
     /**
      * Decoder for this track.
+     * @private
      */
     decoder: Decoder;
 
     /**
      * If needed, resampler for this track.
+     * @private
      */
     resampler: number[];
 
     /**
      * Frame pointer, needed if we're using a resampler.
+     * @private
      */
     framePtr: number;
 
     /**
      * Player for this track.
+     * @private
      */
     player: audioPlayback.AudioPlayback | videoPlayback.VideoPlayback;
 }
 
 /**
  * Incoming data, whether audio or video.
+ * @private
  */
 class IncomingData {
     constructor(
         /**
          * The track number to which this packet belongs.
+         * @private
          */
         public trackIdx: number,
 
         /**
          * The index of this packet.
+         * @private
          */
         public index: number,
 
         /**
          * Is this a keyframe?
+         * @private
          */
         public key: boolean,
 
@@ -916,37 +961,44 @@ class IncomingData {
 
     /**
      * The input encoded data, possibly split into parts.
+     * @private
      */
     encoded: Uint8Array[];
 
     /**
      * The actual displayable data.
+     * @private
      */
     decoded: Float32Array[] | wcp.VideoFrame;
 
     /**
      * The ideal timestamp at which to display this.
+     * @private
      */
     idealTimestamp: number;
 
     /**
      * Set when this has been sent for decoding.
+     * @private
      */
     decoding: boolean;
 
     /**
      * A promise that resolves when the decoded data is available.
+     * @private
      */
     decodingPromise: Promise<void>;
 
     /**
      * And the function to call to resolve the above promise.
+     * @private
      */
     decodingRes: () => void;
 }
 
 /**
  * A decoder with surrounding information.
+ * @private
  */
 class Decoder {
     constructor() {
@@ -959,6 +1011,7 @@ class Decoder {
 
     /**
      * Output callback for the decoder.
+     * @private
      */
     output(data: wcp.AudioData | wcp.VideoFrame) {
         this.buf.push(data);
@@ -968,6 +1021,7 @@ class Decoder {
 
     /**
      * Error callback for the decoder.
+     * @private
      */
     error(error: DOMException) {
         // ... FIXME ...
@@ -975,6 +1029,7 @@ class Decoder {
 
     /**
      * Asynchronously get a decoded packet.
+     * @private
      */
     async get() {
         if (!this.waiters.length && this.buf.length)
@@ -985,6 +1040,7 @@ class Decoder {
 
     /**
      * Set at the beginning when we still need a key chunk to start decoding.
+     * @private
      */
     keyChunkRequired: boolean;
 

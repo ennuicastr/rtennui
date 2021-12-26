@@ -34,6 +34,7 @@ export abstract class VideoCapture extends events.EventEmitter {
 
     /**
      * "Tee" this capture into the number of receivers specified.
+     * @param ct  Number of duplicates to make.
      */
     tee(ct: number): VideoCapture[] {
         if (!this.VideoFrame) {
@@ -98,20 +99,20 @@ export class VideoCaptureTee extends VideoCapture {
         super();
     }
 
-    close() {
+    override close() {
         if (this.onclose)
             this.onclose();
     }
 
-    getWidth() {
+    override getWidth() {
         return this._base.getWidth();
     }
 
-    getHeight() {
+    override getHeight() {
         return this._base.getHeight();
     }
 
-    getFramerate() {
+    override getFramerate() {
         return this._base.getFramerate();
     }
 

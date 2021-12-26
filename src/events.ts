@@ -27,6 +27,8 @@ export class EventEmitter {
 
     /**
      * Set an event handler.
+     * @param ev  Event name, or "*" for all events.
+     * @param handler  Event handler for this event.
      */
     on(ev: string, handler: EventHandler) {
         if (!(ev in this._handlers))
@@ -36,6 +38,8 @@ export class EventEmitter {
 
     /**
      * Set a one-time event handler.
+     * @param ev  Event name, or "*" for all events.
+     * @param handler  Event handler for this event.
      */
     once(ev: string, handler: EventHandler) {
         if (!(ev in this._onceHandlers))
@@ -45,6 +49,8 @@ export class EventEmitter {
 
     /**
      * Remove an event handler.
+     * @param ev  Event name.
+     * @param handler  Handler to remove.
      */
     off(ev: string, handler: EventHandler) {
         for (const handlers of [this._handlers[ev], this._onceHandlers[ev]]) {
@@ -58,6 +64,8 @@ export class EventEmitter {
 
     /**
      * Emit this event.
+     * @param ev  Event name to emit.
+     * @param arg  Argument to the event handler(s).
      */
     emitEvent(ev: string, arg: any) {
         for (const handlers of [this._handlers[ev], this._onceHandlers[ev]]) {

@@ -29,6 +29,7 @@ export abstract class VideoPlayback extends events.EventEmitter {
 
     /**
      * Display this frame.
+     * @param frame  Frame to display.
      */
     abstract display(frame: wcp.VideoFrame): Promise<void>;
 

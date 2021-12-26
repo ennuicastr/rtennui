@@ -17,11 +17,14 @@
 /**
  * Standard ICE servers. Note that our WebSocket server will relay data if we
  * can't get a direct connection, so we have no use for TURN.
+ * @private
  */
 export const iceServers = [{urls: "stun:stun.l.google.com:19302"}];
 
 /**
  * Encode this text (as UTF-8 if possible).
+ * @private
+ * @param text  Text to encode.
  */
 export function encodeText(text: string): Uint8Array {
     if (window.TextEncoder) {
@@ -41,6 +44,8 @@ export function encodeText(text: string): Uint8Array {
 
 /**
  * Decode this (UTF-8) text.
+ * @private
+ * @param text  Encoded text.
  */
 export function decodeText(text: ArrayBuffer): string {
     if (window.TextDecoder) {
@@ -57,6 +62,7 @@ export function decodeText(text: ArrayBuffer): string {
 
 /**
  * How many bytes will it take to encode this number as a network integer?
+ * @param num  Number to encode.
  */
 export function netIntBytes(num: number) {
     if (num === 0)
@@ -73,6 +79,9 @@ export function netIntBytes(num: number) {
 
 /**
  * Encode this number as a network integer.
+ * @param target  Buffer to encode the number into.
+ * @param offset  Offset within the buffer.
+ * @param num  Number to encode.
  */
 export function encodeNetInt(target: Uint8Array, offset: number, num: number) {
     if (num === 0) {
@@ -91,6 +100,8 @@ export function encodeNetInt(target: Uint8Array, offset: number, num: number) {
 
 /**
  * Decode a net integer. Returns the number, updates offset in place.
+ * @param source  Buffer from which to decode a number.
+ * @param o  Offset, in an object to report the resulting offset.
  */
 export function decodeNetInt(source: Uint8Array, o: {offset: number}) {
     let ret = 0, mul = 1;

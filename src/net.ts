@@ -18,21 +18,29 @@ import * as util from "./util";
 
 /**
  * A description of a number entry.
+ * @private
  */
 export type NumberDescr = [number, number, number];
 
 /**
  * A description of a raw entry.
+ * @private
  */
 export type RawDescr = [number, Uint8Array];
 
 /**
  * A description is either.
+ * @private
  */
 export type Descr = NumberDescr | RawDescr;
 
 /**
  * Create an ArrayBuffer based on a description.
+ * @private
+ * @param len  Length of the packet in bytes.
+ * @param peer  Peer ID for the packet.
+ * @param cmd  Command.
+ * @param descr  Packet description.
  */
 export function createPacket(
     len: number, peer: number, cmd: number, descr: Descr[]

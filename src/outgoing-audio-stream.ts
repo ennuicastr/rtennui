@@ -32,6 +32,7 @@ export interface OutgoingAudioStreamOptions {
 
 /**
  * An outgoing audio stream.
+ * @private
  */
 export class OutgoingAudioStream extends events.EventEmitter {
     constructor(
@@ -44,6 +45,8 @@ export class OutgoingAudioStream extends events.EventEmitter {
 
     /**
      * Initialize this outgoing audio stream and start it generating audio.
+     * @private
+     * @param opts  Stream options.
      */
     async init(opts: OutgoingAudioStreamOptions = {}) {
         // Get the frame size into something Opus can handle
@@ -90,6 +93,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
 
     /**
      * Close this stream.
+     * @private
      */
     async close() {
         this.capture.close();
@@ -133,12 +137,18 @@ export class OutgoingAudioStream extends events.EventEmitter {
         data.close();
     }
 
-    // Underlying encoder
+    /**
+     * Underlying encoder.
+     */
     private _encoder: wcp.AudioEncoder;
 
-    // Number of zero frames we've sent if the VAD is off
+    /**
+     * Number of zero frames we've sent if the VAD is off.
+     */
     private _sentZeroFrames: number;
 
-    // Frame size of the encoder in samples
+    /**
+     * Frame size of the encoder in samples.
+     */
     private _frameSize: number;
 }

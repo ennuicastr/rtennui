@@ -57,8 +57,8 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Connect to the RTEnnui server. Returns true if the connection was
      * successful. Do not use if this Connection is already connected or has
      * otherwise been used; make a new one.
-     * @param url  Server address
-     * @param credentials  Login credentials
+     * @param url  Server address.
+     * @param credentials  Login credentials.
      */
     async connect(url: string, credentials: any): Promise<boolean> {
         if (url.indexOf("://") < 0) {
@@ -270,6 +270,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Handler for RTC messages from the server.
+     * @param msg  Received message.
      */
     private async _serverRTCMessage(msg: DataView) {
         const pc = this._serverUnreliablePC;
@@ -310,6 +311,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Handler for messages from the server.
+     * @private ev  Received message event.
      */
     private _serverMessage(ev: MessageEvent) {
         const msg = new DataView(ev.data);
@@ -415,6 +417,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Add an outgoing video track.
+     * @param track  Track to add.
      */
     async addVideoTrack(track: videoCapture.VideoCapture) {
         const stream = new outgoingVideoStream.OutgoingVideoStream(track);
@@ -440,6 +443,8 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Add an outgoing audio track.
+     * @param track  Track to add.
+     * @param opts  Outgoing stream options.
      */
     async addAudioTrack(
         track: audioCapture.AudioCapture,
@@ -517,6 +522,8 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Handle outgoing data.
+     * @param stream  Stream generating the data.
+     * @param data  Data packet to send.
      */
     private _onOutgoingData(
         stream: outgoingVideoStream.OutgoingVideoStream |
@@ -581,6 +588,8 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Handler for encoding errors.
+     * @param stream  Stream generating the error.
+     * @param error  Generated error.
      */
     private _onOutgoingError(
         stream: outgoingVideoStream.OutgoingVideoStream |
