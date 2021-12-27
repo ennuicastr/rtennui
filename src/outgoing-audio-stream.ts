@@ -110,6 +110,13 @@ export class OutgoingAudioStream extends events.EventEmitter {
     }
 
     /**
+     * Get the frame duration in microseconds.
+     */
+    getFrameDuration() {
+        return this._frameSizeUs;
+    }
+
+    /**
      * Input from the audio capture.
      */
     private _oninput(data: Float32Array[]) {

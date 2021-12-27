@@ -503,7 +503,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             })))
             .concat(this._audioTracks.map(x => ({
                 codec: "aopus",
-                frameDuration: 20000
+                frameDuration: x.getFrameDuration()
             })));
 
         // Send out the info
