@@ -39,8 +39,11 @@ export class OutgoingAudioStream extends events.EventEmitter {
         public capture: audioCapture.AudioCapture
     ) {
         super();
+        this._sampleRate = capture.getSampleRate();
         this._sentZeroFrames = 0;
+        this._frameSizeUs = 0;
         this._frameSize = 0;
+        this._ts = 0;
     }
 
     /**
@@ -51,12 +54,12 @@ export class OutgoingAudioStream extends events.EventEmitter {
     async init(opts: OutgoingAudioStreamOptions = {}) {
         // Get the frame size into something Opus can handle
         let frameSize = opts.frameSize || 20000;
-        frameSize = Math.min(Math.ceil(frameSize / 2500) * 2500, 120000);
+        this._frameSizeUs = frameSize =
+            Math.min(Math.ceil(frameSize / 2500) * 2500, 120000);
         this._frameSize = frameSize = ~~(frameSize * 48 / 1000);
 
         /* NOTE: We never use native WebCodecs, because we need to be able to
          * set the frame size. */
-        this.capture.setAudioData(LibAVWebCodecs.AudioData);
 
         // Create our AudioEncoder
         const encoder = this._encoder =
@@ -109,32 +112,57 @@ export class OutgoingAudioStream extends events.EventEmitter {
     /**
      * Input from the audio capture.
      */
-    private _oninput(data: wcp.AudioData) {
+    private _oninput(data: Float32Array[]) {
         if (!this._encoder)
             return;
+
         if (this.capture.getVADState() === "no") {
             // Maybe send a zero frame
             if (this._sentZeroFrames < 3) {
                 const zeroData = new LibAVWebCodecs.AudioData({
                     format: "f32-planar",
                     sampleRate: 48000,
-                    numberOfFrames: 960,
+                    numberOfFrames: this._frameSize,
                     numberOfChannels: 1,
-                    timestamp: data.timestamp,
+                    timestamp: this._ts,
                     data: new Float32Array(this._frameSize)
                 });
+                this._ts += this._frameSizeUs;
                 this._encoder.encode(zeroData);
                 this._sentZeroFrames++;
                 zeroData.close();
             }
 
         } else {
-            this._encoder.encode(data);
+            // Concatenate the data
+            let cData: Float32Array;
+            if (data.length === 1) {
+                cData = data[0];
+            } else {
+                cData = new Float32Array(data.length * data[0].length);
+                let idx = 0;
+                for (const channel of data) {
+                    cData.set(channel, idx);
+                    idx += channel.length;
+                }
+            }
+
+            // Make it an AudioData
+            const ad = new LibAVWebCodecs.AudioData({
+                format: "f32-planar",
+                sampleRate: this._sampleRate,
+                numberOfFrames: data[0].length,
+                numberOfChannels: data.length,
+                timestamp: this._ts,
+                data: cData
+            });
+
+            // And encode it
+            this._ts += Math.round(data[0].length / this._sampleRate * 1000000);
+            this._encoder.encode(ad);
             this._sentZeroFrames = 0;
 
         }
-
-        data.close();
     }
 
     /**
@@ -143,12 +171,27 @@ export class OutgoingAudioStream extends events.EventEmitter {
     private _encoder: wcp.AudioEncoder;
 
     /**
+     * Sample rate of the captured audio.
+     */
+    private readonly _sampleRate: number;
+
+    /**
      * Number of zero frames we've sent if the VAD is off.
      */
     private _sentZeroFrames: number;
 
     /**
+     * Frame size of the encoder in microseconds.
+     */
+    private _frameSizeUs: number;
+
+    /**
      * Frame size of the encoder in samples.
      */
     private _frameSize: number;
+
+    /**
+     * We maintain our own timestamp, which really just runs automatically.
+     */
+    private _ts: number;
 }
