@@ -71,6 +71,10 @@ export function createPacket(
                     ret.setUint32(d[0], d[2], true);
                     break;
 
+                case 8: // float64
+                    ret.setFloat64(d[0], d[2], true);
+                    break;
+
                 default:
                     throw new Error("Invalid description");
             }

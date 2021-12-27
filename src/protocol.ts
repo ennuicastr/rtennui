@@ -36,6 +36,22 @@ export const protocol = {
     },
 
     parts: {
+        /* ping:
+         * c->c: Determine latency with this client.
+         */
+        ping: {
+            length: 12,
+            timestamp: 4 // float64
+        },
+
+        /* pong:
+         * c->c: Reply to ping.
+         */
+        pong: {
+            length: 12,
+            timestamp: 4 // float64, from ping
+        },
+
         /* login:
          * c->s: Log in with the given JSON credentials
          */

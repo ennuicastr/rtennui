@@ -37,6 +37,12 @@ export async function load() {
 }
 
 /**
+ * Ideal number of pings before reporting buffering.
+ * @private
+ */
+const idealPings = 5;
+
+/**
  * A single peer.
  * @private
  */
@@ -62,6 +68,10 @@ export class Peer {
         this.rtcMakingOffer = false;
         this.rtcIgnoreOffer = false;
         this.reliable = this.unreliable = null;
+        this.pingInterval = null;
+        this.pongs = [];
+        this._idealBufferMs = 0;
+        this._incomingReliable = 0;
     }
 
     /**
@@ -133,10 +143,19 @@ export class Peer {
             peer.ondatachannel = ev => {
                 const chan = ev.channel;
                 chan.binaryType = "arraybuffer";
-                if (chan.label === "reliable")
+                if (chan.label === "reliable") {
                     chan.onmessage = ev => this.onMessage(ev, true);
-                else
+
+                    chan.onclose = () => this._incomingReliable--;
+                    this._incomingReliable++;
+
+                    // Possibly set up pings
+                    this.ping();
+
+                } else {
                     chan.onmessage = ev => this.onMessage(ev, false);
+
+                }
             };
         }
 
@@ -148,6 +167,10 @@ export class Peer {
             chan.addEventListener("open", () => {
                 this.reliable = chan;
                 this.p2p();
+
+                // Possibly set up pings
+                this.ping();
+
             }, {once: true});
 
             chan.addEventListener("close", () => {
@@ -284,12 +307,122 @@ export class Peer {
         if (msg.byteLength < 4)
             return;
 
-        // Only data is allowed on the direct connection
+        // Get the command
         const cmd = msg.getUint16(2, true);
-        if (cmd !== prot.ids.data)
+
+        switch (cmd) {
+            case prot.ids.ping:
+                // Just reverse it into a pong
+                if (!this.reliable)
+                    return;
+                msg.setUint16(0, this.room._getOwnId(), true);
+                msg.setUint16(2, prot.ids.pong, true);
+                this.reliable.send(msg.buffer);
+                break;
+
+            case prot.ids.pong:
+                this.pong(msg.getFloat64(prot.parts.pong.timestamp, true));
+                break;
+
+            case prot.ids.data:
+                this.recv(msg);
+                break;
+        }
+    }
+
+    /**
+     * Possibly set up pings to this user.
+     * @private
+     */
+    ping() {
+        if (this.pingInterval || !this.reliable || !this._incomingReliable)
             return;
 
-        this.recv(msg);
+        if (this.pongs.length >= idealPings) {
+            // Ping at a leisurely pace
+            this.pingInterval = setInterval(() => {
+                this.sendPing();
+            }, 30000);
+
+        } else {
+            // Ping once and move from there
+            this.sendPing();
+
+        }
+    }
+
+    /**
+     * Send a single ping.
+     * @private
+     */
+    sendPing() {
+        if (!this.reliable || !this._incomingReliable) {
+            // Nowhere to ping!
+            return;
+        }
+
+        // Create the packet and send it
+        const p = prot.parts.ping;
+        const msg = net.createPacket(
+            p.length, this.room._getOwnId(), prot.ids.ping,
+            [[p.timestamp, 8, performance.now()]]
+        );
+        this.reliable.send(msg);
+    }
+
+    /**
+     * Handler for receiving a pong.
+     * @private
+     * @param timestamp  Timestamp of the original ping.
+     */
+    pong(timestamp: number) {
+        // Add the RTT to the list
+        const pongs = this.pongs;
+        pongs.push(performance.now() - timestamp);
+        while (pongs.length > idealPings)
+            pongs.shift();
+
+        // Calculate the buffer size
+        this._idealBufferMs = Math.min(
+            250, // No more than 250ms buffer
+            Math.max(
+                10, // No less than 10ms buffer
+
+                /* Otherwise, calculate the difference between the max and min
+                 * latency */
+                (Math.max.apply(Math, pongs) - Math.min.apply(Math, pongs))
+
+                /* and multiply it by 0.75, since that's RTT, but data is sent
+                 * one way. i.e., our ideal is 150% of the variance in one-way
+                 * latency. */
+                * 0.75
+            )
+        );
+
+        this.ping();
+    }
+
+    /**
+     * Get the ideal buffer size for this peer.
+     * @private
+     */
+    idealBufferMs() {
+        if (!this.reliable || !this._incomingReliable || this.pongs.length < idealPings) {
+            // No reliable connection, so use the default
+            return 100;
+        }
+
+        let min = 0;
+
+        // No less than two frames
+        if (this.stream) {
+            min = Math.max.apply(Math, this.stream.map(
+                x => x.frameDuration * 2 / 1000));
+        }
+
+        const ideal = Math.max(this._idealBufferMs, min);
+
+        return ideal;
     }
 
     /**
@@ -730,21 +863,22 @@ export class Peer {
      * @private
      */
     async play() {
-        /* Set the ideal start time on the first packet to 100ms from now for
-         * buffering time */
+        /* Set the ideal start time on the first packet to the ideal buffering
+         * time */
         for (const chunk of this.data) {
             if (!chunk)
                 continue;
-            chunk.idealTimestamp = performance.now() + 100;
+            chunk.idealTimestamp = performance.now() + this.idealBufferMs();
             break;
         }
 
         this.playing = true;
 
         while (true) {
-            // Do we have too much data?
-            while (Math.max.apply(Math, this.tracks.map(x => x.duration)) >= 200000
-                   /* FIXME: Magic number */) {
+            // Do we have too much data (more than double our ideal buffer)?
+            const tooMuch = this.idealBufferMs() * 2000;
+            while (Math.max.apply(Math, this.tracks.map(x => x.duration))
+                   >= tooMuch) {
                 if (!this.shift())
                     break;
             }
@@ -869,6 +1003,31 @@ export class Peer {
      * @private
      */
     unreliable: RTCDataChannel;
+
+    /**
+     * Interval used to ping the reliable socket for timing info.
+     * @private
+     */
+    pingInterval: number;
+
+    /**
+     * Pongs from the peer, in terms of microseconds RTT.
+     * @private
+     */
+    pongs: number[];
+
+    /**
+     * Ideal buffer duration *in milliseconds*, based on ping-pong time. Use
+     * the getter instead of this.
+     */
+    private _idealBufferMs: number;
+
+    /**
+     * Number of incoming reliable streams. A number instead of a boolean so
+     * that events can be reordered and we still know whether we have a
+     * connection.
+     */
+    private _incomingReliable: number;
 }
 
 /**
