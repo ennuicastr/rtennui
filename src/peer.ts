@@ -503,6 +503,14 @@ export class Peer {
                     continue;
                 }
 
+                const config: wcp.AudioDecoderConfig = {
+                    codec: "opus",
+                    sampleRate: 48000,
+                    numberOfChannels: 1
+                };
+
+                const env = await LibAVWebCodecs.getAudioDecoder(config);
+
                 // Set up the player
                 const player = track.player =
                     await audioPlayback.createAudioPlayback(ac);
@@ -514,13 +522,8 @@ export class Peer {
                 });
 
                 // Set up the decoder
-                const config: wcp.AudioDecoderConfig = {
-                    codec: "opus",
-                    sampleRate: 48000,
-                    numberOfChannels: 1
-                };
                 const dec = track.decoder = new Decoder();
-                const env = dec.env = await LibAVWebCodecs.getAudioDecoder(config);
+                dec.env = env;
                 dec.decoder = new env.AudioDecoder({
                     output: data => dec.output(data),
                     error: error => dec.error(error)
