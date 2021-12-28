@@ -643,7 +643,9 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     // AbstractRoom methods
+    /** @private */
     override _getOwnId() { return this._id; }
+    /** @private */
     override _sendServer(msg: ArrayBuffer) {
         if (this._serverReliable)
             this._serverReliable.send(msg);
