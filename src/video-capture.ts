@@ -20,6 +20,9 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 
 /**
  * General interface for any video capture subsystem, user-implementable.
+ *
+ * Events:
+ * * data(VideoFrame): A video frame is available.
  */
 export abstract class VideoCapture extends events.EventEmitter {
     constructor() {

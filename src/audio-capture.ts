@@ -28,6 +28,11 @@ export type VADState =
 
 /**
  * General interface for any audio capture subsystem, user-implementable.
+ *
+ * Events:
+ * * data(Float32Array[]): Audio data event. Each element of the array is a
+ *   single channel of audio data.
+ * * vad(null): Audio VAD change event. Fired every time the VAD status changes.
  */
 export abstract class AudioCapture extends events.EventEmitter {
     constructor() {

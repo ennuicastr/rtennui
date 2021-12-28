@@ -22,6 +22,11 @@ declare let LibAVWebCodecs: typeof wcp;
 
 /**
  * An outgoing video stream.
+ *
+ * Events:
+ * * data(VideoFrame): Emitted when a video frame is ready.
+ * * error(DOMException): Emitted when an error occurs.
+ *
  * @private
  */
 export class OutgoingVideoStream extends events.EventEmitter {

@@ -38,6 +38,22 @@ const perPacket = 61440;
  * An RTEnnui connection, including all requisite server and peer connections.
  * Everything to do with the outgoing stream is also implemented here, because
  * there's only one outgoing stream (with any number of tracks) per connection.
+ *
+ * Events:
+ * * connected(null): Connection has successfully been established.
+ * * disconnected(CloseEvent): The connection has been closed.
+ * * peer-joined({id: number, info: any}): A peer has joined.
+ * * peer-left({id: number, info: any}): A peer has left.
+ * * stream-started({peer: number}): A new stream from this peer has started.
+ * * stream-ended({peer: number}): This peer's stream has ended.
+ * * track-started-video({peer: number, id: number, element: HTMLElement}):
+ *   Video track started.
+ * * track-started-audio({peer: number, id: number, node: AudioNode): Audio
+ *   track started.
+ * * track-ended-video({peer: number, id: number, element: HTMLElement}): Video
+ *   track ended.
+ * * track-ended-audio({peer: number, id: number, node: AudioNode}): Audio
+ *   track ended.
  */
 export class Connection extends abstractRoom.AbstractRoom {
     constructor(

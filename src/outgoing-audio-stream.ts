@@ -32,6 +32,11 @@ export interface OutgoingAudioStreamOptions {
 
 /**
  * An outgoing audio stream.
+ *
+ * Events:
+ * * data(AudioData): Emitted when audio data is encoded.
+ * * error(DOMException): Emitted when an error occurs.
+ *
  * @private
  */
 export class OutgoingAudioStream extends events.EventEmitter {
