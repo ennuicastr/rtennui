@@ -44,6 +44,13 @@ const perPacket = 61440;
  * * disconnected(CloseEvent): The connection has been closed.
  * * peer-joined({id: number, info: any}): A peer has joined.
  * * peer-left({id: number, info: any}): A peer has left.
+ * * peer-p2p-connected({peer: number}): We've established a P2P connection
+ *   with this peer.
+ * * peer-p2p-disconnected({peer: number}): We've lost our P2P connection with
+ *   this peer.
+ * * peer-p2p-latency({peer: number, network: number, buffer: number,
+ *   total: number}): Reports the expected latency in receiving audio from this
+ *   peer, in ms, in several components.
  * * stream-started({peer: number}): A new stream from this peer has started.
  * * stream-ended({peer: number}): This peer's stream has ended.
  * * track-started-video({peer: number, id: number, element: HTMLElement}):

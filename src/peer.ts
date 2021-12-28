@@ -177,6 +177,10 @@ export class Peer {
                 if (this.reliable === chan) {
                     this.reliable = null;
 
+                    this.room.emitEvent("peer-p2p-disconnected", {
+                        peer: this.id
+                    });
+
                     const p = prot.parts.peer;
                     const msg = net.createPacket(
                         p.length, this.id, prot.ids.peer,
@@ -206,6 +210,10 @@ export class Peer {
                 if (this.unreliable === chan) {
                     this.unreliable = null;
 
+                    this.room.emitEvent("peer-p2p-disconnected", {
+                        peer: this.id
+                    });
+
                     const p = prot.parts.peer;
                     const msg = net.createPacket(
                         p.length, this.id, prot.ids.peer,
@@ -220,6 +228,10 @@ export class Peer {
 
         // Everything's open, inform the server
         {
+            this.room.emitEvent("peer-p2p-connected", {
+                peer: this.id
+            });
+
             const p = prot.parts.peer;
             const msg = net.createPacket(
                 p.length, this.id, prot.ids.peer,
@@ -398,6 +410,26 @@ export class Peer {
                 * 0.75
             )
         );
+
+        if (this.reliable && this._incomingReliable &&
+            this.pongs.length >= idealPings) {
+            // Inform the user
+            this.room.emitEvent("peer-p2p-latency", {
+                peer: this.id,
+                network: pongs[pongs.length-1],
+                buffer: this._idealBufferMs,
+                total: Math.round(
+                    // The actual network latency...
+                    pongs[pongs.length-1] +
+
+                    // Our buffer
+                    this._idealBufferMs * 1.5 +
+
+                    // The playback delay (final buffer)
+                    10
+                )
+            });
+        }
 
         this.ping();
     }
