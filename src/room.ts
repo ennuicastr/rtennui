@@ -210,6 +210,10 @@ export class Connection extends abstractRoom.AbstractRoom {
         conn.addEventListener("close", ev => {
             this._serverReliable = this._serverUnreliable =
                 this._serverUnreliablePC = null;
+            for (const peer of this._peers) {
+                if (peer)
+                    peer.closeStream();
+            }
             this.emitEvent("disconnected", ev);
         });
 
@@ -218,6 +222,16 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._connectUnreliable();
 
         return true;
+    }
+
+    /**
+     * Disconnect from the RTEnnui server.
+     */
+    disconnect() {
+        if (this._serverReliable)
+            this._serverReliable.close();
+        if (this._serverUnreliable)
+            this._serverUnreliable.close();
     }
 
     /**
