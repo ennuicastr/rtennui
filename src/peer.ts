@@ -416,7 +416,7 @@ export class Peer {
             // Inform the user
             this.room.emitEvent("peer-p2p-latency", {
                 peer: this.id,
-                network: pongs[pongs.length-1],
+                network: Math.round(pongs[pongs.length-1]),
                 buffer: this._idealBufferMs,
                 total: Math.round(
                     // The actual network latency...
