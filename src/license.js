@@ -14,26 +14,3 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-
-import * as events from "./events";
-
-/**
- * The shared room functionality needed by both the room itself and peers (here
- * to avoid circular dependencies). Note that these methods are named with _
- * because they're internal to RTEnnui (and should not be called by external
- * users), but they are public.
- * @private
- */
-export abstract class AbstractRoom extends events.EventEmitter {
-    /**
-     * Get *our* ID in this room.
-     * @private
-     */
-    abstract _getOwnId(): number;
-
-    /**
-     * Send a message to the server.
-     * @private
-     */
-    abstract _sendServer(msg: ArrayBuffer): void;
-}

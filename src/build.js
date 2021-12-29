@@ -26,6 +26,8 @@ for (let ai = 2; ai < process.argv.length; ai++) {
     }
 }
  
+if (minify)
+    fs.createReadStream("src/license.js").pipe(process.stdout);
 let b = browserify({standalone})
     .add(main)
     .plugin(tsify, { noImplicitAny, files: [] })
