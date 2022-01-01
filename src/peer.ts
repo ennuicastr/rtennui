@@ -838,10 +838,15 @@ export class Peer {
                         [frame]
                     );
 
-                if (fframes.length !== 1)
-                    console.error("[ERROR] Number of frames is not 1");
+                if (fframes.length === 0) {
+                    // Resampling is taking a frame
+                    packet.decoded = [];
+                } else {
+                    if (fframes.length !== 1)
+                        console.error("[ERROR] Number of frames is not 1");
 
-                packet.decoded = fframes[0].data;
+                    packet.decoded = fframes[0].data;
+                }
                 packet.decodingRes();
             });
 
