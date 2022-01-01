@@ -38,6 +38,7 @@ export type VADState =
 export abstract class AudioCapture extends events.EventEmitter {
     constructor() {
         super();
+        this._vadState = "yes";
     }
 
     /**
@@ -46,10 +47,20 @@ export abstract class AudioCapture extends events.EventEmitter {
     abstract getSampleRate(): number;
 
     /**
-     * Get the current VAD state. Must also send a "vad" event when this
-     * changes.
+     * Get the current VAD state.
      */
-    getVADState(): VADState { return "yes"; }
+    getVADState(): VADState { return this._vadState; }
+
+    /**
+     * Set the current VAD state. Subclasses may want to block this and do the
+     * VAD themselves.
+     */
+    setVADState(to: VADState) {
+        if (this._vadState === to)
+            return;
+        this._vadState = to;
+        this.emitEvent("vad", null);
+    }
 
     /**
      * Stop this audio capture and remove any underlying data.
@@ -98,6 +109,11 @@ export abstract class AudioCapture extends events.EventEmitter {
 
         return ret;
     }
+
+    /**
+     * Current VAD state.
+     */
+    private _vadState: VADState;
 }
 
 /**
