@@ -17,7 +17,7 @@
 
 onmessage = ev => {
     /* Message is the buffer with [read position, write position]. Wait for the
-    * write position to change. */
+     * write position to change. */
     let prevVal = 0;
     let buf = ev.data;
     while (Atomics.wait(buf, 1, prevVal)) {
