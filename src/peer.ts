@@ -59,6 +59,7 @@ export class Peer {
          */
         public id: number
     ) {
+        this.promise = Promise.all([]);
         this.streamId = -1;
         this.playing = false;
         this.stream = null;
@@ -80,11 +81,14 @@ export class Peer {
      * @private
      */
     async close() {
-        await this.closeStream();
-        if (this.rtc) {
-            this.rtc.close();
-            this.rtc = null;
-        }
+        this.promise = this.promise.then(async () => {
+            await this.closeStream();
+            if (this.rtc) {
+                this.rtc.close();
+                this.rtc = null;
+            }
+        });
+        await this.promise;
     }
 
     /**
@@ -92,22 +96,45 @@ export class Peer {
      * @private
      */
     async p2p() {
-        // Create the RTCPeerConnection
-        let peer: RTCPeerConnection = this.rtc;
-        if (!peer) {
-            peer = this.rtc = new RTCPeerConnection({
-                iceServers: util.iceServers
-            });
+        this.promise = this.promise.then(async () => {
+            // Create the RTCPeerConnection
+            let peer: RTCPeerConnection = this.rtc;
+            if (!peer) {
+                peer = this.rtc = new RTCPeerConnection({
+                    iceServers: util.iceServers
+                });
 
-            // Perfect negotiation pattern
-            peer.onnegotiationneeded = async () => {
-                try {
-                    this.rtcMakingOffer = true;
-                    await peer.setLocalDescription();
+                // Perfect negotiation pattern
+                peer.onnegotiationneeded = async () => {
+                    try {
+                        this.rtcMakingOffer = true;
+                        await peer.setLocalDescription();
+                        const p = prot.parts.rtc;
+                        const data = util.encodeText(
+                            JSON.stringify({
+                                description: peer.localDescription
+                            })
+                        );
+                        const msg = net.createPacket(
+                            p.length + data.length,
+                            this.id, prot.ids.rtc,
+                            [[p.data, data]]
+                        );
+                        this.room._sendServer(msg);
+
+                    } catch (ex) {
+                        console.error(ex);
+
+                    }
+
+                    this.rtcMakingOffer = false;
+                };
+
+                peer.onicecandidate = ev => {
                     const p = prot.parts.rtc;
                     const data = util.encodeText(
                         JSON.stringify({
-                            description: peer.localDescription
+                            candidate: ev.candidate
                         })
                     );
                     const msg = net.createPacket(
@@ -116,130 +143,111 @@ export class Peer {
                         [[p.data, data]]
                     );
                     this.room._sendServer(msg);
+                };
 
-                } catch (ex) {
-                    console.error(ex);
+                // Incoming data channels
+                peer.ondatachannel = ev => {
+                    const chan = ev.channel;
+                    chan.binaryType = "arraybuffer";
+                    if (chan.label === "reliable") {
+                        chan.onmessage = ev => this.onMessage(ev, true);
 
-                }
+                        chan.onclose = () => this._incomingReliable--;
+                        this._incomingReliable++;
 
-                this.rtcMakingOffer = false;
-            };
+                        // Possibly set up pings
+                        this.ping();
 
-            peer.onicecandidate = ev => {
-                const p = prot.parts.rtc;
-                const data = util.encodeText(
-                    JSON.stringify({
-                        candidate: ev.candidate
-                    })
-                );
-                const msg = net.createPacket(
-                    p.length + data.length,
-                    this.id, prot.ids.rtc,
-                    [[p.data, data]]
-                );
-                this.room._sendServer(msg);
-            };
+                    } else {
+                        chan.onmessage = ev => this.onMessage(ev, false);
 
-            // Incoming data channels
-            peer.ondatachannel = ev => {
-                const chan = ev.channel;
+                    }
+                };
+            }
+
+            // Outgoing data channels
+            if (!this.reliable) {
+                const chan = peer.createDataChannel("reliable");
                 chan.binaryType = "arraybuffer";
-                if (chan.label === "reliable") {
-                    chan.onmessage = ev => this.onMessage(ev, true);
 
-                    chan.onclose = () => this._incomingReliable--;
-                    this._incomingReliable++;
+                chan.addEventListener("open", () => {
+                    this.reliable = chan;
+                    this.p2p();
 
                     // Possibly set up pings
                     this.ping();
 
-                } else {
-                    chan.onmessage = ev => this.onMessage(ev, false);
+                }, {once: true});
 
-                }
-            };
-        }
+                chan.addEventListener("close", () => {
+                    if (this.reliable === chan) {
+                        this.reliable = null;
 
-        // Outgoing data channels
-        if (!this.reliable) {
-            const chan = peer.createDataChannel("reliable");
-            chan.binaryType = "arraybuffer";
+                        this.room.emitEvent("peer-p2p-disconnected", {
+                            peer: this.id
+                        });
 
-            chan.addEventListener("open", () => {
-                this.reliable = chan;
-                this.p2p();
+                        const p = prot.parts.peer;
+                        const msg = net.createPacket(
+                            p.length, this.id, prot.ids.peer,
+                            [[p.status, 1, 0]]
+                        );
+                        this.room._sendServer(msg);
+                    }
+                }, {once: true});
 
-                // Possibly set up pings
-                this.ping();
+                // Only do one at a time
+                return;
+            }
 
-            }, {once: true});
+            if (!this.unreliable) {
+                const chan = peer.createDataChannel("unreliable", {
+                    ordered: false,
+                    maxRetransmits: 0
+                });
+                chan.binaryType = "arraybuffer";
 
-            chan.addEventListener("close", () => {
-                if (this.reliable === chan) {
-                    this.reliable = null;
+                chan.addEventListener("open", () => {
+                    this.unreliable = chan;
+                    this.p2p();
+                }, {once: true});
 
-                    this.room.emitEvent("peer-p2p-disconnected", {
-                        peer: this.id
-                    });
+                chan.addEventListener("close", () => {
+                    if (this.unreliable === chan) {
+                        this.unreliable = null;
 
-                    const p = prot.parts.peer;
-                    const msg = net.createPacket(
-                        p.length, this.id, prot.ids.peer,
-                        [[p.status, 1, 0]]
-                    );
-                    this.room._sendServer(msg);
-                }
-            }, {once: true});
+                        this.room.emitEvent("peer-p2p-disconnected", {
+                            peer: this.id
+                        });
 
-            // Only do one at a time
-            return;
-        }
+                        const p = prot.parts.peer;
+                        const msg = net.createPacket(
+                            p.length, this.id, prot.ids.peer,
+                            [[p.status, 1, 0]]
+                        );
+                        this.room._sendServer(msg);
+                    }
+                }, {once: true});
 
-        if (!this.unreliable) {
-            const chan = peer.createDataChannel("unreliable", {
-                ordered: false,
-                maxRetransmits: 0
-            });
-            chan.binaryType = "arraybuffer";
+                return;
+            }
 
-            chan.addEventListener("open", () => {
-                this.unreliable = chan;
-                this.p2p();
-            }, {once: true});
+            // Everything's open, inform the server
+            {
+                this.room.emitEvent("peer-p2p-connected", {
+                    peer: this.id
+                });
 
-            chan.addEventListener("close", () => {
-                if (this.unreliable === chan) {
-                    this.unreliable = null;
+                const p = prot.parts.peer;
+                const msg = net.createPacket(
+                    p.length, this.id, prot.ids.peer,
+                    [[p.status, 1, 1]]
+                );
+                this.room._sendServer(msg);
+            }
+        });
 
-                    this.room.emitEvent("peer-p2p-disconnected", {
-                        peer: this.id
-                    });
-
-                    const p = prot.parts.peer;
-                    const msg = net.createPacket(
-                        p.length, this.id, prot.ids.peer,
-                        [[p.status, 1, 0]]
-                    );
-                    this.room._sendServer(msg);
-                }
-            }, {once: true});
-
-            return;
-        }
-
-        // Everything's open, inform the server
-        {
-            this.room.emitEvent("peer-p2p-connected", {
-                peer: this.id
-            });
-
-            const p = prot.parts.peer;
-            const msg = net.createPacket(
-                p.length, this.id, prot.ids.peer,
-                [[p.status, 1, 1]]
-            );
-            this.room._sendServer(msg);
-        }
+        await this.promise;
     }
 
     /**
@@ -248,65 +256,69 @@ export class Peer {
      * @param pkt  Received packet.
      */
     async rtcRecv(pkt: DataView) {
-        const selfId = this.room._getOwnId();
-        const polite = selfId > this.id;
+        this.promise = this.promise.then(async () => {
+            const selfId = this.room._getOwnId();
+            const polite = selfId > this.id;
 
-        // Get out the data
-        const p = prot.parts.rtc;
-        let msg: any = null;
-        try {
-            const msgU8 = (new Uint8Array(pkt.buffer)).subarray(p.data);
-            const msgS = util.decodeText(msgU8);
-            msg = JSON.parse(msgS);
-        } catch (ex) {}
-        if (!msg)
-            return;
+            // Get out the data
+            const p = prot.parts.rtc;
+            let msg: any = null;
+            try {
+                const msgU8 = (new Uint8Array(pkt.buffer)).subarray(p.data);
+                const msgS = util.decodeText(msgU8);
+                msg = JSON.parse(msgS);
+            } catch (ex) {}
+            if (!msg)
+                return;
 
-        // Perfect negotiation pattern
-        const peer: RTCPeerConnection = this.rtc;
-        try {
-            if (msg.description) {
-                const offerCollision =
-                    (msg.description.type === "offer") &&
-                    (this.rtcMakingOffer ||
-                     peer.signalingState !== "stable");
-                const ignoreOffer = this.rtcIgnoreOffer =
-                    !polite && offerCollision;
-                if (ignoreOffer)
-                    return;
+            // Perfect negotiation pattern
+            const peer: RTCPeerConnection = this.rtc;
+            try {
+                if (msg.description) {
+                    const offerCollision =
+                        (msg.description.type === "offer") &&
+                        (this.rtcMakingOffer ||
+                         peer.signalingState !== "stable");
+                    const ignoreOffer = this.rtcIgnoreOffer =
+                        !polite && offerCollision;
+                    if (ignoreOffer)
+                        return;
 
-                await peer.setRemoteDescription(msg.description);
-                if (msg.description.type === "offer") {
-                    await peer.setLocalDescription();
+                    await peer.setRemoteDescription(msg.description);
+                    if (msg.description.type === "offer") {
+                        await peer.setLocalDescription();
 
-                    const p = prot.parts.rtc;
-                    const data = util.encodeText(
-                        JSON.stringify({
-                            description: peer.localDescription
-                        })
-                    );
-                    const msg = net.createPacket(
-                        p.length + data.length,
-                        this.id, prot.ids.rtc,
-                        [[p.data, data]]
-                    );
-                    this.room._sendServer(msg);
+                        const p = prot.parts.rtc;
+                        const data = util.encodeText(
+                            JSON.stringify({
+                                description: peer.localDescription
+                            })
+                        );
+                        const msg = net.createPacket(
+                            p.length + data.length,
+                            this.id, prot.ids.rtc,
+                            [[p.data, data]]
+                        );
+                        this.room._sendServer(msg);
+                    }
+
+                } else if (msg.candidate) {
+                    try {
+                        await peer.addIceCandidate(msg.candidate);
+                    } catch (ex) {
+                        if (!this.rtcIgnoreOffer)
+                            throw ex;
+                    }
+
                 }
 
-            } else if (msg.candidate) {
-                try {
-                    await peer.addIceCandidate(msg.candidate);
-                } catch (ex) {
-                    if (!this.rtcIgnoreOffer)
-                        throw ex;
-                }
+            } catch (ex) {
+                console.error(ex);
 
             }
+        });
 
-        } catch (ex) {
-            console.error(ex);
-
-        }
+        await this.promise;
     }
 
     /**
@@ -466,126 +478,129 @@ export class Peer {
      * @param info  Track info given by the peer.
      */
     async newStream(ac: AudioContext, id: number, info: any) {
-        const self = this;
+        this.closeStream();
 
-        await this.closeStream();
-        this.streamId = id;
-        this.playing = false;
-        this.stream = info;
-        this.data = [];
-        this.offset = 0;
+        this.promise = this.promise.then(async () => {
+            this.streamId = id;
+            this.playing = false;
+            this.stream = info;
+            this.data = [];
+            this.offset = 0;
 
-        const tracks: Track[] = this.tracks =
-            info.map(() => new Track);
+            const tracks: Track[] = this.tracks =
+                info.map(() => new Track);
 
-        this.room.emitEvent("stream-started", {
-            peer: this.id
-        });
+            this.room.emitEvent("stream-started", {
+                peer: this.id
+            });
 
-        // Initialize the metadata
-        for (let i = 0; i < tracks.length; i++) {
-            const trackInfo = info[i];
-            const track = tracks[i];
+            // Initialize the metadata
+            for (let i = 0; i < tracks.length; i++) {
+                const trackInfo = info[i];
+                const track = tracks[i];
 
-            if (trackInfo.codec[0] === "v") {
-                // Video track
-                track.video = true;
+                if (trackInfo.codec[0] === "v") {
+                    // Video track
+                    track.video = true;
 
-                // Figure out the codec
-                let codec: any;
-                if (trackInfo.codec === "vh263.2") {
-                    codec = {libavjs:{
-                        codec: "h263p"
-                    }};
-                } else {
-                    codec = trackInfo.codec.slice(1);
-                }
-
-                // Find an environment
-                const config: wcp.VideoDecoderConfig = {
-                    codec
-                };
-                let env: wcp.VideoDecoderEnvironment = null;
-                try {
-                    env = await LibAVWebCodecs.getVideoDecoder(config);
-                } catch (ex) {}
-                if (!env) continue;
-
-                const player = track.player =
-                    await videoPlayback.createVideoPlayback();
-
-                this.room.emitEvent("track-started-video", {
-                    peer: this.id,
-                    id: i,
-                    element: player.element()
-                });
-
-                // Set up the decoder
-                const dec = track.decoder = new Decoder();
-                dec.env = env;
-                dec.decoder = new env.VideoDecoder({
-                    output: data => dec.output(data),
-                    error: error => dec.error(error)
-                });
-                await dec.decoder.configure(config);
-
-            } else if (trackInfo.codec[0] === "a") {
-                // Audio track
-                if (trackInfo.codec !== "aopus") {
-                    // Unsupported
-                    continue;
-                }
-
-                const config: wcp.AudioDecoderConfig = {
-                    codec: "opus",
-                    sampleRate: 48000,
-                    numberOfChannels: 1
-                };
-
-                const env = await LibAVWebCodecs.getAudioDecoder(config);
-
-                // Set up the player
-                const player = track.player =
-                    await audioPlayback.createAudioPlayback(ac);
-
-                this.room.emitEvent("track-started-audio", {
-                    peer: this.id,
-                    id: i,
-                    node: player.node()
-                });
-
-                // Set up the decoder
-                const dec = track.decoder = new Decoder();
-                dec.env = env;
-                dec.decoder = new env.AudioDecoder({
-                    output: data => dec.output(data),
-                    error: error => dec.error(error)
-                });
-                await dec.decoder.configure(config);
-
-                // Set up the resampler
-                const pChannels = player.channels();
-                track.resampler = await resampler.ff_init_filter_graph(
-                    "anull",
-                    {
-                        sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
-                        sample_rate: 48000,
-                        channel_layout: 4
-                    },
-                    {
-                        sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
-                        sample_rate: ac.sampleRate,
-                        channel_layout:
-                            (pChannels === 1)
-                            ? 4
-                            : ((1<<pChannels)-1)
+                    // Figure out the codec
+                    let codec: any;
+                    if (trackInfo.codec === "vh263.2") {
+                        codec = {libavjs:{
+                            codec: "h263p"
+                        }};
+                    } else {
+                        codec = trackInfo.codec.slice(1);
                     }
-                );
-                track.framePtr = await resampler.av_frame_alloc();
+
+                    // Find an environment
+                    const config: wcp.VideoDecoderConfig = {
+                        codec
+                    };
+                    let env: wcp.VideoDecoderEnvironment = null;
+                    try {
+                        env = await LibAVWebCodecs.getVideoDecoder(config);
+                    } catch (ex) {}
+                    if (!env) continue;
+
+                    const player = track.player =
+                        await videoPlayback.createVideoPlayback();
+
+                    this.room.emitEvent("track-started-video", {
+                        peer: this.id,
+                        id: i,
+                        element: player.element()
+                    });
+
+                    // Set up the decoder
+                    const dec = track.decoder = new Decoder();
+                    dec.env = env;
+                    dec.decoder = new env.VideoDecoder({
+                        output: data => dec.output(data),
+                        error: error => dec.error(error)
+                    });
+                    await dec.decoder.configure(config);
+
+                } else if (trackInfo.codec[0] === "a") {
+                    // Audio track
+                    if (trackInfo.codec !== "aopus") {
+                        // Unsupported
+                        continue;
+                    }
+
+                    const config: wcp.AudioDecoderConfig = {
+                        codec: "opus",
+                        sampleRate: 48000,
+                        numberOfChannels: 1
+                    };
+
+                    const env = await LibAVWebCodecs.getAudioDecoder(config);
+
+                    // Set up the player
+                    const player = track.player =
+                        await audioPlayback.createAudioPlayback(ac);
+
+                    this.room.emitEvent("track-started-audio", {
+                        peer: this.id,
+                        id: i,
+                        node: player.node()
+                    });
+
+                    // Set up the decoder
+                    const dec = track.decoder = new Decoder();
+                    dec.env = env;
+                    dec.decoder = new env.AudioDecoder({
+                        output: data => dec.output(data),
+                        error: error => dec.error(error)
+                    });
+                    await dec.decoder.configure(config);
+
+                    // Set up the resampler
+                    const pChannels = player.channels();
+                    track.resampler = await resampler.ff_init_filter_graph(
+                        "anull",
+                        {
+                            sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
+                            sample_rate: 48000,
+                            channel_layout: 4
+                        },
+                        {
+                            sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
+                            sample_rate: ac.sampleRate,
+                            channel_layout:
+                                (pChannels === 1)
+                                ? 4
+                                : ((1<<pChannels)-1)
+                        }
+                    );
+                    track.framePtr = await resampler.av_frame_alloc();
+
+                }
 
             }
+        });
 
-        }
+        await this.promise;
     }
 
     /**
@@ -593,46 +608,50 @@ export class Peer {
      * @private
      */
     async closeStream() {
-        if (this.streamId < 0)
-            return;
+        this.promise = this.promise.then(async () => {
+            if (this.streamId < 0)
+                return;
 
-        this.streamId = -1;
+            this.streamId = -1;
 
-        for (let i = 0; i < this.tracks.length; i++) {
-            const track = this.tracks[i];
+            for (let i = 0; i < this.tracks.length; i++) {
+                const track = this.tracks[i];
 
-            if (track.player) {
-                const player = track.player;
-                if (player instanceof videoPlayback.VideoPlayback) {
-                    this.room.emitEvent("track-ended-video", {
-                        peer: this.id,
-                        id: i,
-                        element: player.element()
-                    });
+                if (track.player) {
+                    const player = track.player;
+                    if (player instanceof videoPlayback.VideoPlayback) {
+                        this.room.emitEvent("track-ended-video", {
+                            peer: this.id,
+                            id: i,
+                            element: player.element()
+                        });
 
-                } else {
-                    this.room.emitEvent("track-ended-audio", {
-                        peer: this.id,
-                        id: i,
-                        node: player.node()
-                    });
+                    } else {
+                        this.room.emitEvent("track-ended-audio", {
+                            peer: this.id,
+                            id: i,
+                            node: player.node()
+                        });
 
+                    }
                 }
+
+                if (track.decoder)
+                    await track.decoder.decoder.close();
+
+                if (track.resampler)
+                    await resampler.avfilter_graph_free_js(track.resampler[0]);
+                if (track.framePtr)
+                    await resampler.av_frame_free_js(track.framePtr);
             }
+            this.tracks = null;
 
-            if (track.decoder)
-                await track.decoder.decoder.close();
-
-            if (track.resampler)
-                await resampler.avfilter_graph_free_js(track.resampler[0]);
-            if (track.framePtr)
-                await resampler.av_frame_free_js(track.framePtr);
-        }
-        this.tracks = null;
-
-        this.room.emitEvent("stream-ended", {
-            peer: this.id
+            this.room.emitEvent("stream-ended", {
+                peer: this.id
+            });
         });
+
+        await this.promise;
     }
 
     /**
@@ -978,6 +997,11 @@ export class Peer {
             }
         }
     }
+
+    /**
+     * A single promise to keep everything this peer does in order.
+     */
+    promise: Promise<unknown>;
 
     /**
      * The stream we're currently receiving from this peer, if any.
