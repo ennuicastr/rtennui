@@ -240,8 +240,12 @@ export class AudioCaptureAWP extends AudioCapture {
     close() {
         if (this._worklet) {
             const worklet = this._worklet;
-            this._input.disconnect(worklet);
-            worklet.disconnect(this._ac.destination);
+            try {
+                this._input.disconnect(worklet);
+            } catch (ex) {}
+            try {
+                worklet.disconnect(this._ac.destination);
+            } catch (ex) {}
             worklet.port.postMessage({c: "done"});
         }
 
@@ -301,8 +305,12 @@ export class AudioCaptureSP extends AudioCapture {
      */
     close() {
         const sp = this._sp;
-        this._input.disconnect(sp);
-        sp.disconnect(this._ac.destination);
+        try {
+            this._input.disconnect(sp);
+        } catch (ex) {}
+        try {
+            sp.disconnect(this._ac.destination);
+        } catch (ex) {}
     }
 
     /**
