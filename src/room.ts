@@ -480,6 +480,30 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     /**
+     * Remove an outgoing video track.
+     * @param track  Track to remove.
+     */
+    async removeVideoTrack(track: videoCapture.VideoCapture) {
+        // Find the stream
+        let idx: number;
+        let stream: outgoingVideoStream.OutgoingVideoStream;
+        for (idx = 0; idx < this._videoTracks.length; idx++) {
+            let str = this._videoTracks[idx];
+            if (str.capture === track) {
+                stream = str;
+                break;
+            }
+        }
+        if (!stream)
+            return;
+
+        // Stop and remove it
+        stream.close();
+        this._videoTracks.splice(idx, 1);
+        this._newOutgoingStream();
+    }
+
+    /**
      * Add an outgoing audio track.
      * @param track  Track to add.
      * @param opts  Outgoing stream options.
@@ -493,6 +517,30 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._audioTracks.push(stream);
         stream.on("data", data => this._onOutgoingData(stream, data));
         stream.on("error", error => this._onOutgoingError(stream, error));
+        this._newOutgoingStream();
+    }
+
+    /**
+     * Remove an outgoing audio track.
+     * @param track  Track to remove.
+     */
+    async removeAudioTrack(track: audioCapture.AudioCapture) {
+        // Find the stream
+        let idx: number;
+        let stream: outgoingAudioStream.OutgoingAudioStream;
+        for (idx = 0; idx < this._audioTracks.length; idx++) {
+            let str = this._audioTracks[idx];
+            if (str.capture === track) {
+                stream = str;
+                break;
+            }
+        }
+        if (!stream)
+            return;
+
+        // Stop and remove it
+        stream.close();
+        this._audioTracks.splice(idx, 1);
         this._newOutgoingStream();
     }
 
