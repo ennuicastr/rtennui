@@ -553,8 +553,11 @@ export class Peer {
                         sampleRate: 48000,
                         numberOfChannels: 1
                     };
-
-                    const env = await LibAVWebCodecs.getAudioDecoder(config);
+                    let env: wcp.AudioDecoderEnvironment = null;
+                    try {
+                        env = await LibAVWebCodecs.getAudioDecoder(config);
+                    } catch (ex) {}
+                    if (!env) continue;
 
                     // Set up the player
                     const player = track.player =
