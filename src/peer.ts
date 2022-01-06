@@ -534,12 +534,9 @@ export class Peer {
 
                     // Set up the decoder
                     const dec = track.decoder = new Decoder();
-                    dec.env = env;
-                    dec.decoder = new env.VideoDecoder({
-                        output: data => dec.output(data),
-                        error: error => dec.error(error)
-                    });
-                    await dec.decoder.configure(config);
+                    dec.envV = env;
+                    dec.config = config;
+                    await dec.init();
 
                 } else if (trackInfo.codec[0] === "a") {
                     // Audio track
@@ -571,12 +568,9 @@ export class Peer {
 
                     // Set up the decoder
                     const dec = track.decoder = new Decoder();
-                    dec.env = env;
-                    dec.decoder = new env.AudioDecoder({
-                        output: data => dec.output(data),
-                        error: error => dec.error(error)
-                    });
-                    await dec.decoder.configure(config);
+                    dec.envA = env;
+                    dec.config = config;
+                    await dec.init();
 
                     // Set up the resampler
                     const pChannels = player.channels();
@@ -639,7 +633,7 @@ export class Peer {
                     }
                 }
 
-                if (track.decoder)
+                if (track.decoder && track.decoder.decoder)
                     await track.decoder.decoder.close();
 
                 if (track.resampler)
@@ -757,7 +751,7 @@ export class Peer {
 
         // Get (but don't overload) the decoder
         const decoder = track.decoder;
-        if (!decoder)
+        if (!decoder || !decoder.decoder)
             return;
         if (decoder.decoder.decodeQueueSize > 1) {
             if (opts.force) {
@@ -788,8 +782,7 @@ export class Peer {
         if (track.video) {
             if (decoder.keyChunkRequired && !packet.key) {
                 // Not decodable
-                packet.decoded = new (<wcp.VideoDecoderEnvironment>
-                                      decoder.env).VideoFrame(
+                packet.decoded = new decoder.envV.VideoFrame(
                     new Uint8Array(640 * 360 * 4), {
                     format: <any> "RGBA",
                     codedWidth: 640,
@@ -801,8 +794,7 @@ export class Peer {
 
             } else {
                 decoder.keyChunkRequired = false;
-                chunk = new (<wcp.VideoDecoderEnvironment>
-                             decoder.env).EncodedVideoChunk({
+                chunk = new decoder.envV.EncodedVideoChunk({
                     data: unify(),
                     type: packet.key ? "key" : "delta",
                     timestamp: 0
@@ -811,8 +803,7 @@ export class Peer {
             }
 
         } else {
-            chunk = new (<wcp.AudioDecoderEnvironment>
-                         decoder.env).EncodedAudioChunk({
+            chunk = new decoder.envA.EncodedAudioChunk({
                 data: unify(),
                 type: "key",
                 timestamp: 0
@@ -832,6 +823,12 @@ export class Peer {
 
         } else {
             decoder.get().then(async halfDecoded => {
+                if (!halfDecoded) {
+                    // Failed!
+                    packet.decodingRes();
+                    return;
+                }
+
                 // Convert it to a libav frame
                 const copy: wcp.AudioDataCopyToOptions = {
                     format: <any> "f32-planar",
@@ -1230,7 +1227,9 @@ class IncomingData {
 class Decoder {
     constructor() {
         this.keyChunkRequired = true;
-        this.env = null;
+        this.envA = null;
+        this.envV = null;
+        this.config = null;
         this.decoder = null;
         this.waiters = [];
         this.buf = [];
@@ -1240,7 +1239,13 @@ class Decoder {
      * Output callback for the decoder.
      * @private
      */
-    output(data: wcp.AudioData | wcp.VideoFrame) {
+    output(
+        dec: wcp.AudioDecoder | wcp.VideoDecoder,
+        data: wcp.AudioData | wcp.VideoFrame
+    ) {
+        if (this.decoder !== dec)
+            return;
+
         this.buf.push(data);
         if (this.waiters.length)
             this.waiters.shift()();
@@ -1250,8 +1255,53 @@ class Decoder {
      * Error callback for the decoder.
      * @private
      */
-    error(error: DOMException) {
-        // ... FIXME ...
+    error(dec: wcp.AudioDecoder | wcp.VideoDecoder, error: DOMException) {
+        if (this.decoder !== dec)
+            return;
+
+        /* Reinitialize (FIXME: Some type of timing so we don't do this over
+         * and over?) */
+        this.init();
+
+        // If there's a handler for uncaught errors, it will receive this
+        throw error;
+    }
+
+    /**
+     * Initialize the decoder. env and config must be set.
+     */
+    async init() {
+        // Close the current decoder
+        if (this.decoder) {
+            this.decoder.close();
+            this.decoder = null;
+        }
+
+        // Create a new one
+        let dec: wcp.AudioDecoder | wcp.VideoDecoder;
+        if (this.envV) {
+            dec = new this.envV.VideoDecoder({
+                output: data => this.output(dec, data),
+                error: error => this.error(dec, error)
+            });
+        } else {
+            dec = new this.envA.AudioDecoder({
+                output: data => this.output(dec, data),
+                error: error => this.error(dec, error)
+            });
+        }
+        await dec.configure(<any> this.config);
+
+        // Flush any outdated data
+        while (this.waiters.length > this.buf.length) {
+            this.buf.push(null);
+        }
+        while (this.waiters.length)
+            this.waiters.shift()();
+
+        // And set the new decoder
+        this.keyChunkRequired = true;
+        this.decoder = dec;
     }
 
     /**
@@ -1271,7 +1321,9 @@ class Decoder {
      */
     keyChunkRequired: boolean;
 
-    env: wcp.AudioDecoderEnvironment | wcp.VideoDecoderEnvironment;
+    envA: wcp.AudioDecoderEnvironment;
+    envV: wcp.VideoDecoderEnvironment;
+    config: wcp.AudioDecoderConfig | wcp.VideoDecoderConfig;
     decoder: wcp.AudioDecoder | wcp.VideoDecoder;
     waiters: (() => void)[];
     buf: (wcp.AudioData | wcp.VideoFrame)[];
