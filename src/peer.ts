@@ -1273,7 +1273,9 @@ class Decoder {
     async init() {
         // Close the current decoder
         if (this.decoder) {
-            this.decoder.close();
+            try {
+                this.decoder.close();
+            } catch (ex) {}
             this.decoder = null;
         }
 
