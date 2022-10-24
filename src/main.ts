@@ -16,6 +16,7 @@
  */
 
 import * as audioCapture from "./audio-capture";
+import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as peer from "./peer";
 import {protocol as prot} from "./protocol";
@@ -30,6 +31,9 @@ export async function load() {
 export type AudioCapture = audioCapture.AudioCapture;
 export const AudioCapture = audioCapture.AudioCapture;
 export const createAudioCapture = audioCapture.createAudioCapture;
+
+export type ReliabilityProber = net.ReliabilityProber;
+export const ReliabilityProber = net.ReliabilityProber;
 
 export type OutgoingAudioStreamOptions =
     outgoingAudioStream.OutgoingAudioStreamOptions;

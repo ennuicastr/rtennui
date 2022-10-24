@@ -65,11 +65,22 @@ export class Peer {
         this.stream = null;
         this.data = null;
         this.offset = 0;
+
+        // We log 100 packets for the drop log
+        let dropLog: boolean[] = this.dropLog = [];
+        for (let i = 0; i < 100; i++) {
+            dropLog.push(false);
+        }
+        this.drops = 0;
+        this.dropInfoTimeout = null;
+
         this.tracks = null;
         this.rtc = null;
         this.rtcMakingOffer = false;
         this.rtcIgnoreOffer = false;
-        this.reliable = this.unreliable = null;
+        this.reliable = this.semireliable = this.unreliable = null;
+        this.reliabilityProber = null;
+        this.reliability = net.Reliability.RELIABLE;
         this.pingInterval = null;
         this.pongs = [];
         this._idealBufferMs = 0;
@@ -166,7 +177,7 @@ export class Peer {
             }
 
             // Outgoing data channels
-            if (!this.reliable) {
+            if (!this.reliable && this.reliability > net.Reliability.UNRELIABLE) {
                 const chan = peer.createDataChannel("reliable");
                 chan.binaryType = "arraybuffer";
 
@@ -200,10 +211,9 @@ export class Peer {
                 return;
             }
 
-            if (!this.unreliable) {
+            if (!this.unreliable && this.reliability > net.Reliability.UNRELIABLE) {
                 const chan = peer.createDataChannel("unreliable", {
-                    ordered: false,
-                    maxRetransmits: 0
+                    ordered: false
                 });
                 chan.binaryType = "arraybuffer";
 
@@ -232,6 +242,55 @@ export class Peer {
                 return;
             }
 
+            if (!this.semireliable && this.reliability === net.Reliability.SEMIRELIABLE) {
+                const chan = peer.createDataChannel("semireliable", {
+                    ordered: false,
+                    maxRetransmits: 1
+                });
+                chan.binaryType = "arraybuffer";
+                // FIXME: so much duplication...
+
+                chan.addEventListener("open", () => {
+                    this.semireliable = chan;
+                    this.p2p();
+                }, {once: true});
+
+                chan.addEventListener("close", () => {
+                    if (this.semireliable === chan) {
+                        this.semireliable = null;
+
+                        this.room.emitEvent("peer-p2p-disconnected", {
+                            peer: this.id
+                        });
+
+                        const p = prot.parts.peer;
+                        const msg = net.createPacket(
+                            p.length, this.id, prot.ids.peer,
+                            [[p.status, 1, 0]]
+                        );
+                        this.room._sendServer(msg);
+                    }
+                }, {once: true});
+
+                return;
+            }
+
+            if (this.reliability === net.Reliability.UNRELIABLE) {
+                if (this.reliabilityProber)
+                    this.reliabilityProber.stop();
+                this.reliabilityProber = new net.ReliabilityProber(
+                    this.unreliable, true,
+                    (reliable: boolean) => {
+                        if (reliable) {
+                            this.reliability = net.Reliability.SEMIRELIABLE;
+                            this.reliabilityProber.stop();
+                            this.reliabilityProber = null;
+                            this.p2p();
+                        }
+                    }
+                );
+            }
+
             // Everything's open, inform the server
             {
                 this.room.emitEvent("peer-p2p-connected", {
@@ -241,7 +300,7 @@ export class Peer {
                 const p = prot.parts.peer;
                 const msg = net.createPacket(
                     p.length, this.id, prot.ids.peer,
-                    [[p.status, 1, 1]]
+                    [[p.status, 1, this.reliable ? 1 : 0]]
                 );
                 this.room._sendServer(msg);
             }
@@ -345,12 +404,27 @@ export class Peer {
                 this.reliable.send(msg.buffer);
                 break;
 
+            case prot.ids.rping:
+                // Reliability ping. Just reverse it into a pong.
+                msg.setUint16(0, this.room._getOwnId(), true);
+                msg.setUint16(2, prot.ids.rpong, true);
+                try {
+                    ev.ports[0].postMessage(msg.buffer);
+                } catch (ex) {
+                    console.error(ex);
+                }
+                break;
+
             case prot.ids.pong:
                 this.pong(msg.getFloat64(prot.parts.pong.timestamp, true));
                 break;
 
+            case prot.ids.info:
+                this.recvInfo(msg);
+                break;
+
             case prot.ids.data:
-                this.recv(msg);
+                this.recvData(msg);
                 break;
         }
     }
@@ -656,11 +730,64 @@ export class Peer {
     }
 
     /**
+     * Called when metadata (info) for this peer is received.
+     * @private
+     * @param data  Received info packet.
+     */
+    recvInfo(pkt: DataView) {
+        try {
+            const p = prot.parts.info;
+            const info = JSON.parse(
+                util.decodeText(
+                    (new Uint8Array(pkt.buffer)).subarray(p.data)
+                )
+            );
+
+            // c is the "command" (tho these are generally not command-like)
+            switch (info.c) {
+                case "dropRate":
+                    /* Our drop rate (to this peer) is high. Either reconnect
+                     * with more retransmits, or abort the P2P connection
+                     * entirely and proxy via the server. */
+                    switch (this.reliability) {
+                        case net.Reliability.RELIABLE:
+                            // Use a semi-reliable connection
+                            this.reliability = net.Reliability.SEMIRELIABLE;
+                            if (!this.semireliable)
+                                this.p2p();
+                            break;
+
+                        case net.Reliability.SEMIRELIABLE:
+                        case net.Reliability.UNRELIABLE:
+                        default:
+                            // Don't use any P2P connections
+                            this.reliability = net.Reliability.UNRELIABLE;
+                            if (this.unreliable) {
+                                this.unreliable.close();
+                                this.unreliable = null;
+                            }
+                            if (this.semireliable) {
+                                this.semireliable.close();
+                                this.semireliable = null;
+                            }
+                            if (this.reliable) {
+                                this.reliable.close();
+                                this.reliable = null;
+                            }
+                            this.p2p();
+                            break;
+                    }
+                    break;
+            }
+        } catch (ex) {}
+    }
+
+    /**
      * Called when data for this peer is received.
      * @private
      * @param data  Received data packet.
      */
-    recv(data: DataView) {
+    recvData(data: DataView) {
         try {
             const p = prot.parts.data;
             const info = data.getUint8(p.info);
@@ -881,11 +1008,14 @@ export class Peer {
      * @private
      */
     shift() {
-        while (this.data.length) {
+        console.error(`Length is ${this.data.length}`);
+        while (this.data.length > 1) {
             const next: IncomingData = this.data[0];
             if (!next) {
+                // Dropped!
                 this.data.shift();
                 this.offset++;
+                this.logDrop(true);
                 continue;
             }
 
@@ -908,6 +1038,7 @@ export class Peer {
             // We're either displaying it or skipping it, so shift it
             this.data.shift();
             this.offset++;
+            this.logDrop(false);
             const track = this.tracks[next.trackIdx];
             track.duration -=
                 this.stream[next.trackIdx].frameDuration;
@@ -1003,6 +1134,58 @@ export class Peer {
     }
 
     /**
+     * Log a drop or non-drop of a packet.
+     * @private
+     * @param dropped  True if the packet was dropped.
+     */
+    logDrop(dropped: boolean) {
+        // Shift it into the log
+        if (this.dropLog[0])
+            this.drops--;
+        this.dropLog.shift();
+        this.dropLog.push(dropped);
+        if (dropped)
+            this.drops++;
+        if (dropped)
+            console.error(`Dropped!`);
+        //console.error(`[INFO] Drop rate: ${Math.round(this.drops / this.dropLog.length * 100)}%`);
+
+        // Check for high drop rate
+        if (!this.dropInfoTimeout &&
+            this.drops >= this.dropLog.length / 8) {
+            // Tell them about it
+            const p = prot.parts.info;
+            const data = util.encodeText(
+                JSON.stringify({
+                    c: "dropRate",
+                    dropRate: this.drops / this.dropLog.length
+                })
+            );
+            const msg = net.createPacket(
+                p.length + data.length,
+                this.id, prot.ids.info,
+                [[p.data, data]]
+            );
+            if (this.reliable)
+                this.reliable.send(msg);
+            else
+                this.room._sendServer(msg);
+
+            // And wait to tell them again
+            this.dropInfoTimeout = setTimeout(() => {
+                this.dropInfoTimeout = null;
+
+                // Reset the log
+                const len = this.dropLog.length;
+                this.dropLog = [];
+                for (let i = 0; i < len; i++)
+                    this.dropLog.push(false);
+                this.drops = 0;
+            }, 5000);
+        }
+    }
+
+    /**
      * A single promise to keep everything this peer does in order.
      */
     promise: Promise<unknown>;
@@ -1038,6 +1221,25 @@ export class Peer {
     offset: number;
 
     /**
+     * Drops for the previous (some reasonable amount) packets.
+     * @private
+     */
+    dropLog: boolean[];
+
+    /**
+     * # of drops in the drop log.
+     * @private
+     */
+    drops: number;
+
+    /**
+     * If the # of drops gets too high and we inform the other end, we set a
+     * timeout to avoid telling them repeatedly.
+     * @private
+     */
+    dropInfoTimeout: number | null;
+
+    /**
      * Each track's information.
      * @private
      */
@@ -1068,10 +1270,29 @@ export class Peer {
     reliable: RTCDataChannel;
 
     /**
+     * The semi-reliable connection (one retransmit) to this peer, only set if it's needed.
+     * @private
+     */
+    semireliable: RTCDataChannel;
+
+    /**
      * The unreliable connection to this peer.
      * @private
      */
     unreliable: RTCDataChannel;
+
+    /**
+     * Prober to probe unreliable connections, *if* we're currently in
+     * *unreliable* mode, so can't use the actual data to probe.
+     */
+    reliabilityProber: net.ReliabilityProber;
+
+    /**
+     * The current (measured) reliability of our OUTGOING connection. This gets
+     * reduced if too many outgoing packets drop.
+     * @private
+     */
+    reliability: net.Reliability;
 
     /**
      * Interval used to ping the reliable socket for timing info.

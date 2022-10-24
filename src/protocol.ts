@@ -22,6 +22,8 @@ export const protocol = {
         nack: 0x01,
         ping: 0x02,
         pong: 0x03,
+        rping: 0x04,
+        rpong: 0x05,
 
         // Basic negotiation
         login: 0x10,
@@ -31,6 +33,7 @@ export const protocol = {
         // Peer and stream info
         peer: 0x20,
         stream: 0x21,
+        info: 0x22, // Other info
 
         // Actual streaming data, sent via multiple channels
         data: 0x30
@@ -51,6 +54,22 @@ export const protocol = {
         pong: {
             length: 12,
             timestamp: 4 // float64, from ping
+        },
+
+        /* rping:
+         * c->s, s->c, c->c: Determine reliability with this peer.
+         */
+        rping: {
+            length: 8,
+            id: 4 // uint32
+        },
+
+        /* rpong:
+         * c->s, s->c, c->c: Reply to rping.
+         */
+        rpong: {
+            length: 8,
+            id: 4 // uint32
         },
 
         /* login:
@@ -97,6 +116,15 @@ export const protocol = {
             length: 5, // + data
             id: 4, // only bits in 0x70 used
             data: 5
+        },
+
+        /* info:
+         * c->s, s->c, c->s->c, c->c: Other metadata info not covered by
+         *       anything else, in JSON.
+         */
+        info: {
+            length: 4, // + data
+            data: 4
         },
 
         /* data:

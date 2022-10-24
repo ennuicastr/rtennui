@@ -74,6 +74,8 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._serverReliable = null;
         this._serverUnreliable = null;
         this._serverUnreliablePC = null;
+        this._serverReliability = net.Reliability.RELIABLE;
+        this._serverReliabilityProber = null;
         this._peers = [];
     }
 
@@ -211,6 +213,8 @@ export class Connection extends abstractRoom.AbstractRoom {
         conn.addEventListener("close", ev => {
             this._serverReliable = this._serverUnreliable =
                 this._serverUnreliablePC = null;
+            if (this._serverReliabilityProber)
+                this._serverReliabilityProber.stop();
             for (const peer of this._peers) {
                 if (peer)
                     peer.closeStream();
@@ -294,11 +298,22 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         dc.addEventListener("open", () => {
             this._serverUnreliable = dc;
+            this._serverReliability = net.Reliability.RELIABLE;
+            this._serverReliabilityProber = new net.ReliabilityProber(
+                dc, true,
+                (reliable: boolean) => {
+                    this._serverReliability = reliable ?
+                        net.Reliability.RELIABLE :
+                        net.Reliability.UNRELIABLE;
+                }
+            );
         }, {once: true});
 
         dc.addEventListener("close", () => {
-            if (this._serverUnreliable === dc)
+            if (this._serverUnreliable === dc) {
                 this._serverUnreliable = null;
+                this._serverReliabilityProber.stop();
+            }
         }, {once: true});
 
         dc.onmessage = ev => {
@@ -439,12 +454,16 @@ export class Connection extends abstractRoom.AbstractRoom {
                 break;
             }
 
+            case prot.ids.info:
             case prot.ids.data:
             {
                 const peerO = this._peers[peerId];
                 if (!peerO)
                     break;
-                peerO.recv(msg);
+                if (cmd === prot.ids.info)
+                    peerO.recvInfo(msg);
+                else // data
+                    peerO.recvData(msg);
                 break;
             }
 
@@ -555,9 +574,15 @@ export class Connection extends abstractRoom.AbstractRoom {
         for (const peer of this._peers) {
             if (!peer)
                 continue;
-            if (!reliable && peer.unreliable)
-                peer.unreliable.send(buf);
-            else if (reliable && peer.reliable)
+            if (!reliable && peer.unreliable) {
+                let drop = false;
+                if (peer.reliability >= 2)
+                    drop = Math.random() < 0.75;
+                else
+                    drop = Math.random() < 0.375;
+                if (!drop)
+                    peer.unreliable.send(buf);
+            } else if (reliable && peer.reliable)
                 peer.reliable.send(buf);
             else
                 needRelay = true;
@@ -565,7 +590,9 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         // Relay if needed
         if (needRelay) {
-            if (!reliable && this._serverUnreliable)
+            if (!reliable &&
+                this._serverReliability === net.Reliability.RELIABLE &&
+                this._serverUnreliable)
                 this._serverUnreliable.send(buf);
             else if (this._serverReliable)
                 this._serverReliable.send(buf);
@@ -753,6 +780,16 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Unreliable connection to the server.
      */
     private _serverUnreliable: RTCDataChannel;
+
+    /**
+     * Expected reliability of the *unreliable* server connection.
+     */
+    private _serverReliability: net.Reliability;
+
+    /**
+     * Prober for server reliability.
+     */
+    private _serverReliabilityProber: net.ReliabilityProber;
 
     /**
      * Peers.
