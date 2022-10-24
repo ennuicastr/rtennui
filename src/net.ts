@@ -67,18 +67,18 @@ export class ReliabilityProber {
         this.drops = 0;
         this.pongIdx = 0;
 
-        function onclose() {
+        const onclose = () => {
             if (this.dead)
                 return;
             this.dead = true;
             this.conn.removeEventListener("message", onmessage);
             this.conn.removeEventListener("close", onclose);
-        }
+        };
         this.stop = onclose;
 
         this.conn.addEventListener("close", onclose);
 
-        function onmessage(ev: MessageEvent<ArrayBuffer>) {
+        const onmessage = (ev: MessageEvent<ArrayBuffer>) => {
             if (this.dead)
                 return;
 
@@ -99,9 +99,9 @@ export class ReliabilityProber {
             if (!this.pongs[pidx])
                 this.drops--;
             this.pongs[pidx] = true;
-        }
+        };
 
-        function doPing() {
+        const doPing = () => {
             if (this.dead)
                 return;
 
@@ -157,7 +157,7 @@ export class ReliabilityProber {
             } else {
                 setTimeout(doPing, 10000);
             }
-        }
+        };
 
         doPing();
     }

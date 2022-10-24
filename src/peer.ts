@@ -161,7 +161,7 @@ export class Peer {
                     const chan = ev.channel;
                     chan.binaryType = "arraybuffer";
                     if (chan.label === "reliable") {
-                        chan.onmessage = ev => this.onMessage(ev, true);
+                        chan.onmessage = ev => this.onMessage(ev, chan, true);
 
                         chan.onclose = () => this._incomingReliable--;
                         this._incomingReliable++;
@@ -170,7 +170,7 @@ export class Peer {
                         this.ping();
 
                     } else {
-                        chan.onmessage = ev => this.onMessage(ev, false);
+                        chan.onmessage = ev => this.onMessage(ev, chan, false);
 
                     }
                 };
@@ -211,7 +211,7 @@ export class Peer {
                 return;
             }
 
-            if (!this.unreliable && this.reliability > net.Reliability.UNRELIABLE) {
+            if (!this.unreliable) {
                 const chan = peer.createDataChannel("unreliable", {
                     ordered: false
                 });
@@ -242,7 +242,8 @@ export class Peer {
                 return;
             }
 
-            if (!this.semireliable && this.reliability === net.Reliability.SEMIRELIABLE) {
+            if (!this.semireliable &&
+                this.reliability === net.Reliability.SEMIRELIABLE) {
                 const chan = peer.createDataChannel("semireliable", {
                     ordered: false,
                     maxRetransmits: 1
@@ -384,9 +385,12 @@ export class Peer {
      * Handler for incoming messages from this peer.
      * @private
      * @param ev  Event containing the received message.
+     * @param chan  The channel this message was received on.
      * @param reliable  True if this was sent over a reliable connection.
      */
-    onMessage(ev: MessageEvent<ArrayBuffer>, reliable: boolean) {
+    onMessage(
+        ev: MessageEvent<ArrayBuffer>, chan: RTCDataChannel, reliable: boolean
+    ) {
         const msg = new DataView(ev.data);
         if (msg.byteLength < 4)
             return;
@@ -409,7 +413,7 @@ export class Peer {
                 msg.setUint16(0, this.room._getOwnId(), true);
                 msg.setUint16(2, prot.ids.rpong, true);
                 try {
-                    ev.ports[0].postMessage(msg.buffer);
+                    chan.send(msg.buffer);
                 } catch (ex) {
                     console.error(ex);
                 }
@@ -1008,7 +1012,6 @@ export class Peer {
      * @private
      */
     shift() {
-        console.error(`Length is ${this.data.length}`);
         while (this.data.length > 1) {
             const next: IncomingData = this.data[0];
             if (!next) {

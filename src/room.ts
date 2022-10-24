@@ -574,14 +574,27 @@ export class Connection extends abstractRoom.AbstractRoom {
         for (const peer of this._peers) {
             if (!peer)
                 continue;
-            if (!reliable && peer.unreliable) {
-                let drop = false;
-                if (peer.reliability >= 2)
-                    drop = Math.random() < 0.75;
-                else
-                    drop = Math.random() < 0.375;
-                if (!drop)
-                    peer.unreliable.send(buf);
+
+            if (!reliable) {
+                // Try to send it unreliably
+                if (peer.reliability >= net.Reliability.RELIABLE &&
+                    peer.unreliable) {
+                    // Randomness just for testing!
+                    if (Math.random() > 0.75)
+                        peer.unreliable.send(buf);
+
+                } else if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
+                           peer.semireliable) {
+                    peer.semireliable.send(buf);
+
+                } else if (peer.reliable) { // Unreliable
+                    peer.reliable.send(buf);
+
+                } else {
+                    needRelay = true;
+
+                }
+
             } else if (reliable && peer.reliable)
                 peer.reliable.send(buf);
             else
