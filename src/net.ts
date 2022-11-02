@@ -34,6 +34,18 @@ export enum Reliability {
 }
 
 /**
+ * Convert a reliability to a descriptive string.
+ */
+export function reliabilityStr(reliability: Reliability) {
+    switch (reliability) {
+        case Reliability.UNRELIABLE: return "unreliable";
+        case Reliability.SEMIRELIABLE: return "semireliable";
+        case Reliability.RELIABLE: return "reliable";
+        default: return "???";
+    }
+}
+
+/**
  * A reliability prober probes the reliability of an RTCDataChannel, either
  * momentarily or continuously, and calls a given callback when and if
  * reliability drops to 1/16 pings lost.
@@ -86,7 +98,7 @@ export class ReliabilityProber {
             if (msg.byteLength < 8)
                 return;
 
-            const cmd = msg.getUint32(0, true);
+            const cmd = msg.getUint16(2, true);
             if (cmd !== protocol.ids.rpong)
                 return;
             let pidx = msg.getUint32(protocol.parts.rpong.id, true);
@@ -100,6 +112,8 @@ export class ReliabilityProber {
                 this.drops--;
             this.pongs[pidx] = true;
         };
+
+        this.conn.addEventListener("message", onmessage);
 
         const doPing = () => {
             if (this.dead)
@@ -149,12 +163,14 @@ export class ReliabilityProber {
             }
 
             // And send more pings
-            if (this.pongs.length < this.checkCt) {
+            if (this.pongs.length < this.checkCt - 1) {
+                // Get our initial pings out fast
                 setTimeout(doPing, 10);
-            } else if (this.drops > 1) {
+            } else if (this.drops > 1 && this.wasReliable) {
                 // Try to find unreliability quickly
                 setTimeout(doPing, 250);
             } else {
+                // Otherwise, just wait a while then ping
                 setTimeout(doPing, 10000);
             }
         };

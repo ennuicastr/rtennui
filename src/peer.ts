@@ -290,12 +290,16 @@ export class Peer {
                         }
                     }
                 );
+            } else if (this.reliabilityProber) {
+                this.reliabilityProber.stop();
+                this.reliabilityProber = null;
             }
 
             // Everything's open, inform the server
             {
                 this.room.emitEvent("peer-p2p-connected", {
-                    peer: this.id
+                    peer: this.id,
+                    reliability: net.reliabilityStr(this.reliability)
                 });
 
                 const p = prot.parts.peer;
@@ -766,10 +770,6 @@ export class Peer {
                         default:
                             // Don't use any P2P connections
                             this.reliability = net.Reliability.UNRELIABLE;
-                            if (this.unreliable) {
-                                this.unreliable.close();
-                                this.unreliable = null;
-                            }
                             if (this.semireliable) {
                                 this.semireliable.close();
                                 this.semireliable = null;

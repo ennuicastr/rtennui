@@ -207,7 +207,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         // Prepare for other messages
         conn.addEventListener("message", ev => {
-            this._serverMessage(ev);
+            this._serverMessage(ev, conn);
         });
 
         conn.addEventListener("close", ev => {
@@ -305,8 +305,14 @@ export class Connection extends abstractRoom.AbstractRoom {
                     this._serverReliability = reliable ?
                         net.Reliability.RELIABLE :
                         net.Reliability.UNRELIABLE;
+                    this.emitEvent("server-unreliable-connected", {
+                        reliability: net.reliabilityStr(this._serverReliability)
+                    });
                 }
             );
+            this.emitEvent("server-unreliable-connected", {
+                reliability: "reliable"
+            });
         }, {once: true});
 
         dc.addEventListener("close", () => {
@@ -314,10 +320,11 @@ export class Connection extends abstractRoom.AbstractRoom {
                 this._serverUnreliable = null;
                 this._serverReliabilityProber.stop();
             }
+            this.emitEvent("server-unreliable-disconnected", {});
         }, {once: true});
 
         dc.onmessage = ev => {
-            this._serverMessage(ev);
+            this._serverMessage(ev, dc);
         };
     }
 
@@ -364,9 +371,11 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Handler for messages from the server.
-     * @private ev  Received message event.
+     * @private
+     * @param ev  Received message event.
+     * @param chan  The channel that this message was received on.
      */
-    private _serverMessage(ev: MessageEvent) {
+    private _serverMessage(ev: MessageEvent, chan: WebSocket | RTCDataChannel) {
         const msg = new DataView(ev.data);
         const peerId = msg.getUint16(0, true);
         const cmd = msg.getUint16(2, true);
@@ -374,6 +383,17 @@ export class Connection extends abstractRoom.AbstractRoom {
         switch (cmd) {
             case prot.ids.ack:
                 // Nothing to do
+                break;
+
+            case prot.ids.rping:
+                // Reliability ping. Just reverse it into a pong.
+                msg.setUint16(0, this._getOwnId(), true);
+                msg.setUint16(2, prot.ids.rpong, true);
+                try {
+                    chan.send(msg.buffer);
+                } catch (ex) {
+                    console.error(ex);
+                }
                 break;
 
             case prot.ids.formats:
@@ -576,12 +596,10 @@ export class Connection extends abstractRoom.AbstractRoom {
                 continue;
 
             if (!reliable) {
-                // Try to send it unreliably
+                // Try to send it unreliably, but p2p
                 if (peer.reliability >= net.Reliability.RELIABLE &&
                     peer.unreliable) {
-                    // Randomness just for testing!
-                    if (Math.random() > 0.75)
-                        peer.unreliable.send(buf);
+                    peer.unreliable.send(buf);
 
                 } else if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
                            peer.semireliable) {
