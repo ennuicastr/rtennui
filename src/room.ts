@@ -623,10 +623,20 @@ export class Connection extends abstractRoom.AbstractRoom {
         if (needRelay) {
             if (!reliable &&
                 this._serverReliability === net.Reliability.RELIABLE &&
-                this._serverUnreliable)
+                this._serverUnreliable) {
                 this._serverUnreliable.send(buf);
-            else if (this._serverReliable)
+
+            } else if (!reliable) {
+                /* We only have the WebSocket connection, so we don't want to
+                 * cause buffering for normal data. Just send this if we're not
+                 * buffering. */
+                if (this._serverReliable.bufferedAmount < 1024)
+                    this._serverReliable.send(buf);
+
+            } else if (this._serverReliable) {
                 this._serverReliable.send(buf);
+
+            }
         }
     }
 

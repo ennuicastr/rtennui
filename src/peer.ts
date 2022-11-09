@@ -66,9 +66,9 @@ export class Peer {
         this.data = null;
         this.offset = 0;
 
-        // We log 100 packets for the drop log
+        // We log 128 packets for the drop log
         let dropLog: boolean[] = this.dropLog = [];
-        for (let i = 0; i < 100; i++) {
+        for (let i = 0; i < 128; i++) {
             dropLog.push(false);
         }
         this.drops = 0;
@@ -181,7 +181,22 @@ export class Peer {
                 const chan = peer.createDataChannel("reliable");
                 chan.binaryType = "arraybuffer";
 
+                let connTimeout = setTimeout(() => {
+                    // Failed to connect in time!
+                    connTimeout = null;
+                    this.reliability = net.Reliability.UNRELIABLE;
+                    this.p2p();
+                }, 10000);
+
                 chan.addEventListener("open", () => {
+                    if (!connTimeout) {
+                        // Too late, timed out
+                        chan.close();
+                        return;
+                    } else {
+                        clearTimeout(connTimeout);
+                    }
+
                     this.reliable = chan;
                     this.p2p();
 
@@ -217,7 +232,24 @@ export class Peer {
                 });
                 chan.binaryType = "arraybuffer";
 
+                let connTimeout = setTimeout(() => {
+                    // Timed out, try again
+                    connTimeout = null;
+                    try {
+                        chan.close();
+                    } catch (ex) {}
+                    this.p2p();
+                }, 10000);
+
                 chan.addEventListener("open", () => {
+                    if (!connTimeout) {
+                        // Too late, timed out
+                        chan.close();
+                        return;
+                    } else {
+                        clearTimeout(connTimeout);
+                    }
+
                     this.unreliable = chan;
                     this.p2p();
                 }, {once: true});
@@ -251,7 +283,20 @@ export class Peer {
                 chan.binaryType = "arraybuffer";
                 // FIXME: so much duplication...
 
+                let connTimeout = setTimeout(() => {
+                    connTimeout = null;
+                    this.reliability = net.Reliability.UNRELIABLE;
+                    this.p2p();
+                }, 10000);
+
                 chan.addEventListener("open", () => {
+                    if (!connTimeout) {
+                        chan.close();
+                        return;
+                    } else {
+                        clearTimeout(connTimeout);
+                    }
+
                     this.semireliable = chan;
                     this.p2p();
                 }, {once: true});
@@ -276,7 +321,8 @@ export class Peer {
                 return;
             }
 
-            if (this.reliability === net.Reliability.UNRELIABLE) {
+            if (this.unreliable &&
+                this.reliability === net.Reliability.UNRELIABLE) {
                 if (this.reliabilityProber)
                     this.reliabilityProber.stop();
                 this.reliabilityProber = new net.ReliabilityProber(
@@ -1149,13 +1195,11 @@ export class Peer {
         this.dropLog.push(dropped);
         if (dropped)
             this.drops++;
-        if (dropped)
-            console.error(`Dropped!`);
         //console.error(`[INFO] Drop rate: ${Math.round(this.drops / this.dropLog.length * 100)}%`);
 
         // Check for high drop rate
         if (!this.dropInfoTimeout &&
-            this.drops >= this.dropLog.length / 8) {
+            this.drops >= this.dropLog.length / 16) {
             // Tell them about it
             const p = prot.parts.info;
             const data = util.encodeText(
