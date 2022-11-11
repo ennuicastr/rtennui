@@ -60,6 +60,7 @@ export class Peer {
         public id: number
     ) {
         this.promise = Promise.all([]);
+        this.p2pPromise = Promise.all([]);
         this.streamId = -1;
         this.playing = false;
         this.stream = null;
@@ -92,13 +93,13 @@ export class Peer {
      * @private
      */
     async close() {
+        this.closeStream();
         this.promise = this.promise.then(async () => {
-            await this.closeStream();
             if (this.rtc) {
                 this.rtc.close();
                 this.rtc = null;
             }
-        });
+        }).catch(console.error);
         await this.promise;
     }
 
@@ -107,11 +108,10 @@ export class Peer {
      * @private
      */
     async p2p() {
-        this.promise = this.promise.then(async () => {
+        this.p2pPromise = this.p2pPromise.then(async () => {
             // Create the RTCPeerConnection
-            let peer: RTCPeerConnection = this.rtc;
-            if (!peer) {
-                peer = this.rtc = new RTCPeerConnection({
+            if (!this.rtc) {
+                const peer = this.rtc = new RTCPeerConnection({
                     iceServers: util.iceServers
                 });
 
@@ -177,159 +177,34 @@ export class Peer {
             }
 
             // Outgoing data channels
-            if (!this.reliable && this.reliability > net.Reliability.UNRELIABLE) {
-                const chan = peer.createDataChannel("reliable");
-                chan.binaryType = "arraybuffer";
-
-                let connTimeout = setTimeout(() => {
-                    // Failed to connect in time!
-                    connTimeout = null;
-                    this.reliability = net.Reliability.UNRELIABLE;
-                    this.p2p();
-                }, 10000);
-
-                chan.addEventListener("open", () => {
-                    if (!connTimeout) {
-                        // Too late, timed out
-                        chan.close();
-                        return;
-                    } else {
-                        clearTimeout(connTimeout);
-                    }
-
-                    this.reliable = chan;
-                    this.p2p();
-
-                    // Possibly set up pings
-                    this.ping();
-
-                }, {once: true});
-
-                chan.addEventListener("close", () => {
-                    if (this.reliable === chan) {
-                        this.reliable = null;
-
-                        this.room.emitEvent("peer-p2p-disconnected", {
-                            peer: this.id
-                        });
-
-                        const p = prot.parts.peer;
-                        const msg = net.createPacket(
-                            p.length, this.id, prot.ids.peer,
-                            [[p.status, 1, 0]]
-                        );
-                        this.room._sendServer(msg);
-                    }
-                }, {once: true});
-
-                // Only do one at a time
+            try {
+                if (!this.unreliable) {
+                    this.unreliable = await this.p2pChannel("unreliable", {
+                        ordered: false
+                    }, chan => {
+                        if (this.unreliable === chan)
+                            this.unreliable = null;
+                    });
+                }
+            } catch (ex) {
+                // Unreliable connection failed, try again
+                this.p2p();
                 return;
             }
 
-            if (!this.unreliable) {
-                const chan = peer.createDataChannel("unreliable", {
-                    ordered: false
-                });
-                chan.binaryType = "arraybuffer";
-
-                let connTimeout = setTimeout(() => {
-                    // Timed out, try again
-                    connTimeout = null;
-                    try {
-                        chan.close();
-                    } catch (ex) {}
-                    this.p2p();
-                }, 10000);
-
-                chan.addEventListener("open", () => {
-                    if (!connTimeout) {
-                        // Too late, timed out
-                        chan.close();
-                        return;
-                    } else {
-                        clearTimeout(connTimeout);
-                    }
-
-                    this.unreliable = chan;
-                    this.p2p();
-                }, {once: true});
-
-                chan.addEventListener("close", () => {
-                    if (this.unreliable === chan) {
-                        this.unreliable = null;
-
-                        this.room.emitEvent("peer-p2p-disconnected", {
-                            peer: this.id
-                        });
-
-                        const p = prot.parts.peer;
-                        const msg = net.createPacket(
-                            p.length, this.id, prot.ids.peer,
-                            [[p.status, 1, 0]]
-                        );
-                        this.room._sendServer(msg);
-                    }
-                }, {once: true});
-
-                return;
-            }
-
-            if (!this.semireliable &&
-                this.reliability === net.Reliability.SEMIRELIABLE) {
-                const chan = peer.createDataChannel("semireliable", {
-                    ordered: false,
-                    maxRetransmits: 1
-                });
-                chan.binaryType = "arraybuffer";
-                // FIXME: so much duplication...
-
-                let connTimeout = setTimeout(() => {
-                    connTimeout = null;
-                    this.reliability = net.Reliability.UNRELIABLE;
-                    this.p2p();
-                }, 10000);
-
-                chan.addEventListener("open", () => {
-                    if (!connTimeout) {
-                        chan.close();
-                        return;
-                    } else {
-                        clearTimeout(connTimeout);
-                    }
-
-                    this.semireliable = chan;
-                    this.p2p();
-                }, {once: true});
-
-                chan.addEventListener("close", () => {
-                    if (this.semireliable === chan) {
-                        this.semireliable = null;
-
-                        this.room.emitEvent("peer-p2p-disconnected", {
-                            peer: this.id
-                        });
-
-                        const p = prot.parts.peer;
-                        const msg = net.createPacket(
-                            p.length, this.id, prot.ids.peer,
-                            [[p.status, 1, 0]]
-                        );
-                        this.room._sendServer(msg);
-                    }
-                }, {once: true});
-
-                return;
-            }
-
+            // Once we have an unreliable connection, we can probe reliability
             if (this.unreliable &&
-                this.reliability === net.Reliability.UNRELIABLE) {
+                this.reliability !== net.Reliability.RELIABLE) {
+                /* In reliable mode, we'll discover the reliability from the
+                 * data. Otherwise, we'll need to probe. */
                 if (this.reliabilityProber)
                     this.reliabilityProber.stop();
-                this.reliabilityProber = new net.ReliabilityProber(
+                const rp = this.reliabilityProber = new net.ReliabilityProber(
                     this.unreliable, true,
-                    (reliable: boolean) => {
-                        if (reliable) {
-                            this.reliability = net.Reliability.SEMIRELIABLE;
+                    (reliability: net.Reliability) => {
+                        if (this.reliabilityProber === rp && reliability > this.reliability) {
+                            if (this.reliability < net.Reliability.RELIABLE)
+                                this.reliability++;
                             this.reliabilityProber.stop();
                             this.reliabilityProber = null;
                             this.p2p();
@@ -339,6 +214,37 @@ export class Peer {
             } else if (this.reliabilityProber) {
                 this.reliabilityProber.stop();
                 this.reliabilityProber = null;
+            }
+
+            try {
+                if (!this.semireliable &&
+                    this.reliability === net.Reliability.SEMIRELIABLE) {
+                    this.semireliable = await this.p2pChannel("semireliable", {
+                        ordered: false,
+                        maxRetransmits: 1
+                    }, chan => {
+                        if (this.semireliable === chan)
+                            this.semireliable = null;
+                    });
+                }
+
+                if (!this.reliable &&
+                    this.reliability > net.Reliability.UNRELIABLE) {
+                    this.reliable = await this.p2pChannel("reliable", void 0,
+                    chan => {
+                        if (this.reliable === chan)
+                            this.reliable = null;
+                    });
+
+
+                    // Pings are only done on the reliable channel
+                    this.ping();
+                }
+
+            } catch (ex) {
+                // If any of this fails, we simply try again
+                this.p2p();
+                return;
             }
 
             // Everything's open, inform the server
@@ -355,10 +261,76 @@ export class Peer {
                 );
                 this.room._sendServer(msg);
             }
-        });
+
+        }).catch(console.error);
 
         await this.promise;
     }
+
+    /**
+     * Establish a single peer-to-peer connection.
+     * @private
+     * @param label  The name for the channel.
+     * @param options  Options passed to createDataChannel.
+     * @param onclose  Function to call when this connection is closed (as well
+     *                 as reporting it and reconnecting).
+     */
+    async p2pChannel(
+        label: string, options: any, onclose: (chan: RTCDataChannel) => unknown
+    ): Promise<RTCDataChannel> {
+        return new Promise((res, rej) => {
+            const chan = this.rtc.createDataChannel(label, options);
+            chan.binaryType = "arraybuffer";
+            let opened = false;
+
+            let connTimeout = setTimeout(() => {
+                // Failed to connect in time!
+                connTimeout = null;
+                this.reliability = net.Reliability.UNRELIABLE;
+                if (this.reliable) {
+                    this.reliable.close();
+                    this.reliable = null;
+                }
+                rej(new Error);
+            }, 60000);
+
+            chan.addEventListener("open", () => {
+                if (!connTimeout) {
+                    // Too late, timed out
+                    chan.close();
+                    return;
+                } else {
+                    clearTimeout(connTimeout);
+                }
+
+                opened = true;
+                res(chan);
+
+            }, {once: true});
+
+            chan.addEventListener("close", () => {
+                if (!opened)
+                    return;
+                opened = false;
+
+                onclose(chan);
+
+                this.room.emitEvent("peer-p2p-disconnected", {
+                    peer: this.id
+                });
+
+                const p = prot.parts.peer;
+                const msg = net.createPacket(
+                    p.length, this.id, prot.ids.peer,
+                    [[p.status, 1, 0]]
+                );
+                this.room._sendServer(msg);
+
+                this.p2p();
+            }, {once: true});
+        });
+    }
+
 
     /**
      * Handler for incoming RTC negotiation messages from this user.
@@ -426,7 +398,7 @@ export class Peer {
                 console.error(ex);
 
             }
-        });
+        }).catch(console.error);
 
         await this.promise;
     }
@@ -727,7 +699,7 @@ export class Peer {
                 }
 
             }
-        });
+        }).catch(console.error);
 
         await this.promise;
     }
@@ -778,7 +750,7 @@ export class Peer {
             this.room.emitEvent("stream-ended", {
                 peer: this.id
             });
-        });
+        }).catch(console.error);
 
         await this.promise;
     }
@@ -1236,6 +1208,12 @@ export class Peer {
      * A single promise to keep everything this peer does in order.
      */
     promise: Promise<unknown>;
+
+    /**
+     * A promise for P2P connection stuff, which should not serialize with the
+     * rest.
+     */
+    p2pPromise: Promise<unknown>;
 
     /**
      * The stream we're currently receiving from this peer, if any.

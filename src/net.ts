@@ -63,7 +63,7 @@ export class ReliabilityProber {
         /**
          * The callback to call on reliability changes.
          */
-        public cb: (reliable:boolean)=>unknown
+        public cb: (reliable:Reliability)=>unknown
     ) {
         this.go();
     }
@@ -73,7 +73,7 @@ export class ReliabilityProber {
      */
     go() {
         this.dead = false;
-        this.wasReliable = null;
+        this.lastReliability = null;
         this.idx = 0;
         this.pongs = [];
         this.drops = 0;
@@ -103,9 +103,6 @@ export class ReliabilityProber {
                 return;
             let pidx = msg.getUint32(protocol.parts.rpong.id, true);
 
-            if (pidx < this.pongIdx || pidx >= this.idx)
-                return;
-
             // Mark this pong as received
             pidx -= this.pongIdx;
             if (!this.pongs[pidx])
@@ -115,25 +112,26 @@ export class ReliabilityProber {
 
         this.conn.addEventListener("message", onmessage);
 
+        const report = (reliability: Reliability) => {
+            if (this.lastReliability !== reliability) {
+                this.lastReliability = reliability;
+                this.cb(reliability);
+            }
+        };
+
         const doPing = () => {
             if (this.dead)
                 return;
 
             // Check our status
             if (this.pongs.length >= this.checkCt) {
-                if (this.drops >= (this.pongs.length / this.dropReport)) {
-                    // Too many drops!
-                    if (this.wasReliable !== false) {
-                        this.wasReliable = false;
-                        this.cb(false);
-                    }
-
-                } else if (this.drops === 0 || this.wasReliable === null) {
-                    if (this.wasReliable !== true) {
-                        this.wasReliable = true;
-                        this.cb(true);
-                    }
-
+                if (this.drops >= this.pongs.length / this.reportUnreliable) {
+                    report(Reliability.UNRELIABLE);
+                } else if (this.drops >= this.pongs.length / this.reportSemireliable) {
+                    report(Reliability.SEMIRELIABLE);
+                } else if (this.drops < this.pongs.length / this.reportReliable ||
+                           !this.continuous) {
+                    report(Reliability.RELIABLE);
                 }
 
                 if (!this.continuous) {
@@ -147,7 +145,7 @@ export class ReliabilityProber {
             const p = protocol.parts.rping;
             const msg = createPacket(
                 p.length, -1, protocol.ids.rping,
-                [[p.id, 4, this.idx]]
+                [[p.id, 4, this.idx++]]
             );
             this.conn.send(msg);
 
@@ -160,13 +158,14 @@ export class ReliabilityProber {
                 if (!this.pongs[0])
                     this.drops--;
                 this.pongs.shift();
+                this.pongIdx++;
             }
 
             // And send more pings
             if (this.pongs.length < this.checkCt - 1) {
                 // Get our initial pings out fast
                 setTimeout(doPing, 10);
-            } else if (this.drops > 1 && this.wasReliable) {
+            } else if (this.drops > 1 && this.lastReliability === Reliability.RELIABLE) {
                 // Try to find unreliability quickly
                 setTimeout(doPing, 250);
             } else {
@@ -187,14 +186,20 @@ export class ReliabilityProber {
     // Set when we've stopped probing
     dead: boolean;
 
-    // Did the last callback call report reliable?
-    wasReliable: boolean | null;
+    // Last reported reliability
+    lastReliability: Reliability | null;
 
     // Do 32 pings before checking
     checkCt = 32;
 
-    // Report a problem if more than 1/16 are dropped
-    dropReport = 16;
+    // Report reliable if none are dropped
+    reportReliable = 32;
+
+    // Report semireliable if more than 1/16 are dropped
+    reportSemireliable = 16;
+
+    // Report unreliable if more than 1/8 are dropped
+    reportUnreliable = 8;
 
     // Index we're next going to ping
     idx: number;

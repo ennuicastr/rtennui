@@ -301,13 +301,16 @@ export class Connection extends abstractRoom.AbstractRoom {
             this._serverReliability = net.Reliability.RELIABLE;
             this._serverReliabilityProber = new net.ReliabilityProber(
                 dc, true,
-                (reliable: boolean) => {
-                    this._serverReliability = reliable ?
+                (reliability: net.Reliability) => {
+                    const was = this._serverReliability;
+                    this._serverReliability = (reliability === net.Reliability.RELIABLE) ?
                         net.Reliability.RELIABLE :
                         net.Reliability.UNRELIABLE;
-                    this.emitEvent("server-unreliable-connected", {
-                        reliability: net.reliabilityStr(this._serverReliability)
-                    });
+                    if (this._serverReliability !== was) {
+                        this.emitEvent("server-unreliable-connected", {
+                            reliability: net.reliabilityStr(this._serverReliability)
+                        });
+                    }
                 }
             );
             this.emitEvent("server-unreliable-connected", {
@@ -394,6 +397,10 @@ export class Connection extends abstractRoom.AbstractRoom {
                 } catch (ex) {
                     console.error(ex);
                 }
+                break;
+
+            case prot.ids.rpong:
+                // Their pong, handled elsewhere
                 break;
 
             case prot.ids.formats:
@@ -626,15 +633,16 @@ export class Connection extends abstractRoom.AbstractRoom {
                 this._serverUnreliable) {
                 this._serverUnreliable.send(buf);
 
-            } else if (!reliable) {
-                /* We only have the WebSocket connection, so we don't want to
-                 * cause buffering for normal data. Just send this if we're not
-                 * buffering. */
-                if (this._serverReliable.bufferedAmount < 1024)
-                    this._serverReliable.send(buf);
-
             } else if (this._serverReliable) {
-                this._serverReliable.send(buf);
+                if (!reliable) {
+                    /* We only have the WebSocket connection, so we don't want
+                     * to cause buffering for normal data. Just send this if
+                     * we're not buffering. */
+                    if (this._serverReliable.bufferedAmount < 8192)
+                        this._serverReliable.send(buf);
+                } else {
+                    this._serverReliable.send(buf);
+                }
 
             }
         }
