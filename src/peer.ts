@@ -61,6 +61,7 @@ export class Peer {
     ) {
         this.promise = Promise.all([]);
         this.p2pPromise = Promise.all([]);
+        this.closed = false;
         this.streamId = -1;
         this.playing = false;
         this.stream = null;
@@ -93,6 +94,9 @@ export class Peer {
      * @private
      */
     async close() {
+        if (this.closed)
+            return;
+        this.closed = true;
         this.closeStream();
         this.promise = this.promise.then(async () => {
             if (this.rtc) {
@@ -107,7 +111,19 @@ export class Peer {
      * Establish peer-to-peer connections.
      * @private
      */
-    async p2p() {
+    async p2p(opts: {
+        forceCompleteReconnect?: boolean
+    } = {}) {
+        if (this.closed)
+            return;
+
+        // Force a complete reconnect if asked
+        if (this.rtc && opts.forceCompleteReconnect) {
+            // Completely drop the old RTC instance and try again
+            this.rtc.close();
+            this.rtc = null;
+        }
+
         this.p2pPromise = this.p2pPromise.then(async () => {
             // Create the RTCPeerConnection
             if (!this.rtc) {
@@ -188,7 +204,7 @@ export class Peer {
                 }
             } catch (ex) {
                 // Unreliable connection failed, try again
-                this.p2p();
+                this.p2p({forceCompleteReconnect: true});
                 return;
             }
 
@@ -202,7 +218,8 @@ export class Peer {
                 const rp = this.reliabilityProber = new net.ReliabilityProber(
                     this.unreliable, true,
                     (reliability: net.Reliability) => {
-                        if (this.reliabilityProber === rp && reliability > this.reliability) {
+                        if (this.reliabilityProber === rp &&
+                            reliability > this.reliability) {
                             if (this.reliability < net.Reliability.RELIABLE)
                                 this.reliability++;
                             this.reliabilityProber.stop();
@@ -243,7 +260,7 @@ export class Peer {
 
             } catch (ex) {
                 // If any of this fails, we simply try again
-                this.p2p();
+                this.p2p({forceCompleteReconnect: true});
                 return;
             }
 
@@ -292,7 +309,7 @@ export class Peer {
                     this.reliable = null;
                 }
                 rej(new Error);
-            }, 60000);
+            }, 10000);
 
             chan.addEventListener("open", () => {
                 if (!connTimeout) {
@@ -1206,14 +1223,22 @@ export class Peer {
 
     /**
      * A single promise to keep everything this peer does in order.
+     * @private
      */
     promise: Promise<unknown>;
 
     /**
      * A promise for P2P connection stuff, which should not serialize with the
      * rest.
+     * @private
      */
     p2pPromise: Promise<unknown>;
+
+    /**
+     * Set when this peer has been disconnected, so no reconnects should be
+     * attempted.
+     */
+    closed: boolean;
 
     /**
      * The stream we're currently receiving from this peer, if any.
