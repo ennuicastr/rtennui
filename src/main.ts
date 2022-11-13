@@ -32,6 +32,9 @@ export type AudioCapture = audioCapture.AudioCapture;
 export const AudioCapture = audioCapture.AudioCapture;
 export const createAudioCapture = audioCapture.createAudioCapture;
 
+export type Reliability = net.Reliability;
+export const Reliability = net.Reliability;
+
 export type ReliabilityProber = net.ReliabilityProber;
 export const ReliabilityProber = net.ReliabilityProber;
 
