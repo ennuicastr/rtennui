@@ -146,7 +146,7 @@ export class AudioPlaybackSP extends AudioPlayback {
 
         // Create the ScriptProcessor
         const sp = this._sp =
-            _ac.createScriptProcessor(1024, 1, 1);
+            _ac.createScriptProcessor(4096, 1, 1);
         sp.onaudioprocess = ev => {
             // Get the output channels
             const outChans = ev.outputBuffer.numberOfChannels;
@@ -155,7 +155,7 @@ export class AudioPlaybackSP extends AudioPlayback {
                 outData.push(ev.outputBuffer.getChannelData(i));
 
             // If we have less than one buffer, send nothing
-            if (this._bufferedSamples < outData[0].length)
+            if (this._bufferedSamples < outData[0].length * 2)
                 return;
 
             // If we have too much data, drop some
@@ -165,16 +165,16 @@ export class AudioPlaybackSP extends AudioPlayback {
             }
 
             // Copy in data
-            let len = 0, remain = outData[0].length;
+            let rd = 0, remain = outData[0].length;
             while (remain > 0 && this._buffer.length) {
                 const inBuf = this._buffer[0];
-                if (inBuf[0].length <= outData[0].length) {
+                if (inBuf[0].length <= remain) {
                     // Use this entire buffer
                     for (let i = 0; i < outData.length; i++)
-                        outData[i].set(inBuf[i%inBuf.length], len);
+                        outData[i].set(inBuf[i%inBuf.length], rd);
                     this._bufferedSamples -= inBuf[0].length;
                     this._buffer.shift();
-                    len += inBuf[0].length;
+                    rd += inBuf[0].length;
                     remain -= inBuf[0].length;
 
                 } else { // inBuf too big
@@ -182,13 +182,13 @@ export class AudioPlaybackSP extends AudioPlayback {
                     for (let i = 0; i < outData.length; i++) {
                         outData[i].set(
                             inBuf[i%inBuf.length].subarray(0, remain),
-                            len
+                            rd
                         );
                     }
                     for (let i = 0; i < inBuf.length; i++)
                         inBuf[i] = inBuf[i].subarray(remain);
                     this._bufferedSamples -= remain;
-                    len += remain;
+                    rd += remain;
                     remain = 0;
 
                 }
@@ -200,7 +200,6 @@ export class AudioPlaybackSP extends AudioPlayback {
 
         // Connect it up
         nullInput.connect(sp);
-        sp.connect(_ac.destination);
         nullInput.start();
     }
 
@@ -210,7 +209,6 @@ export class AudioPlaybackSP extends AudioPlayback {
     close() {
         this._nullInput.stop();
         this._nullInput.disconnect(this._sp);
-        this._sp.disconnect(this._ac.destination);
     }
 
     /**
