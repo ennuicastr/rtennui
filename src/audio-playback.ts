@@ -17,6 +17,7 @@
 
 import * as playAwp from "./play-awp-js";
 import * as events from "./events";
+import * as util from "./util";
 
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
@@ -138,45 +139,86 @@ export class AudioPlaybackSP extends AudioPlayback {
     ) {
         super();
 
-        /*
+        this._bufferedSamples = 0;
+        this._buffer = [];
+
         const sampleRate = _ac.sampleRate;
 
         // Create the ScriptProcessor
         const sp = this._sp =
             _ac.createScriptProcessor(1024, 1, 1);
         sp.onaudioprocess = ev => {
-            if (!this.AudioData)
+            // Get the output channels
+            const outChans = ev.outputBuffer.numberOfChannels;
+            const outData: Float32Array[] = [];
+            for (let i = 0; i < outChans; i++)
+                outData.push(ev.outputBuffer.getChannelData(i));
+
+            // If we have less than one buffer, send nothing
+            if (this._bufferedSamples < outData[0].length)
                 return;
 
-            const data = ev.inputBuffer.getChannelData(0);
-            const ad = new this.AudioData({
-                format: <any> "f32-planar",
-                sampleRate: sampleRate,
-                numberOfFrames: data.length,
-                numberOfChannels: 1,
-                timestamp: ts,
-                data
-            });
-            ts += Math.round(data.length / sampleRate * 1000000);
-            this.emitEvent("data", ad);
+            // If we have too much data, drop some
+            while (this._bufferedSamples > outData[0].length * 4) {
+                this._bufferedSamples -= this._buffer[0][0].length;
+                this._buffer.shift();
+            }
+
+            // Copy in data
+            let len = 0, remain = outData[0].length;
+            while (remain > 0 && this._buffer.length) {
+                const inBuf = this._buffer[0];
+                if (inBuf[0].length <= outData[0].length) {
+                    // Use this entire buffer
+                    for (let i = 0; i < outData.length; i++)
+                        outData[i].set(inBuf[i%inBuf.length], len);
+                    this._bufferedSamples -= inBuf[0].length;
+                    this._buffer.shift();
+                    len += inBuf[0].length;
+                    remain -= inBuf[0].length;
+
+                } else { // inBuf too big
+                    // Use part of this buffer
+                    for (let i = 0; i < outData.length; i++) {
+                        outData[i].set(
+                            inBuf[i%inBuf.length].subarray(0, remain),
+                            len
+                        );
+                    }
+                    for (let i = 0; i < inBuf.length; i++)
+                        inBuf[i] = inBuf[i].subarray(remain);
+                    this._bufferedSamples -= remain;
+                    len += remain;
+                    remain = 0;
+
+                }
+            }
         };
 
+        // Create a null input so it runs
+        const nullInput = this._nullInput = _ac.createConstantSource();
+
         // Connect it up
-        _input.connect(sp);
+        nullInput.connect(sp);
         sp.connect(_ac.destination);
-        */
+        nullInput.start();
     }
 
     /**
      * Close and destroy this script processor.
      */
     close() {
+        this._nullInput.stop();
+        this._nullInput.disconnect(this._sp);
+        this._sp.disconnect(this._ac.destination);
     }
 
     /**
      * Play this audio.
      */
     play(data: Float32Array[]) {
+        this._bufferedSamples += data[0].length;
+        this._buffer.push(data.map(x => x.slice(0)));
     }
 
     /**
@@ -194,9 +236,24 @@ export class AudioPlaybackSP extends AudioPlayback {
     }
 
     /**
+     * A null input used to make the script processor run.
+     */
+    private _nullInput: ConstantSourceNode;
+
+    /**
      * The actual script processor.
      */
     private _sp: ScriptProcessorNode;
+
+    /**
+     * The amount of audio data we have buffered.
+     */
+    private _bufferedSamples: number;
+
+    /**
+     * The buffer of audio data itself.
+     */
+    private _buffer: Float32Array[][];
 }
 
 /**
@@ -205,7 +262,8 @@ export class AudioPlaybackSP extends AudioPlayback {
 export async function createAudioPlayback(
     ac: AudioContext
 ): Promise<AudioPlayback> {
-    if (typeof AudioWorkletNode !== "undefined") {
+    if (typeof AudioWorkletNode !== "undefined" &&
+        !util.isSafari()) {
         const ret = new AudioPlaybackAWP(ac);
         await ret.init();
         return ret;

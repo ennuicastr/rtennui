@@ -117,3 +117,20 @@ export function decodeNetInt(source: Uint8Array, o: {offset: number}) {
 
     return ret;
 }
+
+/**
+ * True if this browser is Chrome. Really just used by isSafari, below.
+ */
+function isChrome() {
+    // Edge is Chrome, Opera is Chrome, Brave is Chrome...
+    return navigator.userAgent.indexOf("Chrome") >= 0;
+}
+
+/**
+ * True if this browser is Safari (and NOT Chrome). Used to work around some
+ * Safari-specific bugs.
+ */
+export function isSafari(): boolean {
+    // Chrome pretends to be Safari
+    return navigator.userAgent.indexOf("Safari") >= 0 && !isChrome();
+}

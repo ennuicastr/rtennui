@@ -18,6 +18,7 @@
 import * as capAwp from "./cap-awp-js";
 import * as capAwpWaiter from "./cap-awp-waiter-js";
 import * as events from "./events";
+import * as util from "./util";
 
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
@@ -328,7 +329,8 @@ export async function createAudioCapture(
     ac: AudioContext, ms: MediaStream
 ): Promise<AudioCapture> {
     const mss = ac.createMediaStreamSource(ms);
-    if (typeof AudioWorkletNode !== "undefined") {
+    if (typeof AudioWorkletNode !== "undefined" &&
+        !util.isSafari()) {
         const ret = new AudioCaptureAWP(ac, mss);
         await ret.init();
         return ret;
