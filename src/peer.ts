@@ -16,6 +16,7 @@
  */
 
 import * as abstractRoom from "./abstract-room";
+import * as audioBidir from "./audio-bidir";
 import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import {protocol as prot} from "./protocol";
@@ -679,12 +680,13 @@ export class Peer {
 
                     // Set up the player
                     const player = track.player =
-                        await audioPlayback.createAudioPlayback(ac);
+                        await audioBidir.createAudioPlayback(ac);
 
                     this.room.emitEvent("track-started-audio", {
                         peer: this.id,
                         id: i,
-                        node: player.node()
+                        node: player.unsharedNode(),
+                        sharedNode: player.sharedNode()
                     });
 
                     // Set up the decoder
@@ -748,7 +750,8 @@ export class Peer {
                         this.room.emitEvent("track-ended-audio", {
                             peer: this.id,
                             id: i,
-                            node: player.node()
+                            node: player.unsharedNode(),
+                            sharedNode: player.sharedNode()
                         });
 
                     }

@@ -40,9 +40,19 @@ export abstract class AudioPlayback extends events.EventEmitter {
     abstract channels(): number;
 
     /**
-     * Get the underlying AudioNode.
+     * Get the underlying AudioNode, *if* there is a unique audio node for this
+     * playback.
      */
-    abstract node(): AudioNode;
+    unsharedNode(): AudioNode {
+        return null;
+    }
+
+    /**
+     * Get the underlying AudioNode, if it's shared.
+     */
+    sharedNode(): AudioNode {
+        return null;
+    }
 
     /**
      * Stop this audio playback and remove any underlying data.
@@ -104,7 +114,7 @@ export class AudioPlaybackAWP extends AudioPlayback {
     /**
      * Get the underlying AudioNode.
      */
-    node() {
+    override unsharedNode() {
         return this._worklet;
     }
 
@@ -229,7 +239,7 @@ export class AudioPlaybackSP extends AudioPlayback {
     /**
      * Get the underlying AudioNode.
      */
-    node() {
+    override unsharedNode() {
         return this._sp;
     }
 
@@ -257,7 +267,7 @@ export class AudioPlaybackSP extends AudioPlayback {
 /**
  * Create an appropriate audio playback from an AudioContext.
  */
-export async function createAudioPlayback(
+export async function createAudioPlaybackNoBidir(
     ac: AudioContext
 ): Promise<AudioPlayback> {
     if (typeof AudioWorkletNode !== "undefined" &&

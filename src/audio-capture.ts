@@ -325,7 +325,7 @@ export class AudioCaptureSP extends AudioCapture {
  * @param ac  The AudioContext for the nodes.
  * @param ms  The MediaStream from which to create a capture.
  */
-export async function createAudioCapture(
+export async function createAudioCaptureNoBidir(
     ac: AudioContext, ms: MediaStream
 ): Promise<AudioCapture> {
     const mss = ac.createMediaStreamSource(ms);

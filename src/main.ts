@@ -15,6 +15,7 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+import * as audioBidir from "./audio-bidir";
 import * as audioCapture from "./audio-capture";
 import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
@@ -30,7 +31,7 @@ export async function load() {
 
 export type AudioCapture = audioCapture.AudioCapture;
 export const AudioCapture = audioCapture.AudioCapture;
-export const createAudioCapture = audioCapture.createAudioCapture;
+export const createAudioCapture = audioBidir.createAudioCapture;
 
 export type Reliability = net.Reliability;
 export const Reliability = net.Reliability;
