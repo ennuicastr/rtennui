@@ -158,11 +158,23 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         // Wait for it to open
         const opened = await new Promise(res => {
+            let timeout = setTimeout(() => {
+                timeout = null;
+                res(false);
+            }, 30000);
             conn.addEventListener("open", ev => {
-                res(true);
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = null;
+                    res(true);
+                }
             }, {once: true});
             conn.addEventListener("close", ev => {
-                res(false);
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = null;
+                    res(false);
+                }
             }, {once: true});
         });
         if (!opened)
