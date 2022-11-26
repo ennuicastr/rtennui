@@ -143,7 +143,7 @@ export class AudioCaptureAWP extends AudioCapture {
             waiter.onmessage = ev => {
                 this._onwaiter(ev);
             };
-            waiter.postMessage(msg.ougoingRW);
+            waiter.postMessage(msg.outgoingRW);
 
         }
     }

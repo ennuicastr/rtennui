@@ -61,8 +61,8 @@ class CaptureProcessor extends AudioWorkletProcessor {
         this.done = false;
 
         // Can we use shared memory?
-        this.canShared = false;
-            //typeof SharedArrayBuffer !== "undefined";
+        this.canShared =
+            typeof SharedArrayBuffer !== "undefined";
 
         this.port.onmessage = ev => {
             const msg = ev.data;
@@ -72,7 +72,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>) {
+    process(
+        inputs: Float32Array[][], outputs: Float32Array[][],
+        parameters: Record<string, Float32Array>
+    ) {
         if (this.done)
             return false;
         if (inputs.length === 0 || inputs[0].length === 0)
@@ -86,8 +89,13 @@ class CaptureProcessor extends AudioWorkletProcessor {
             if (this.canShared) {
                 // Set up our shared memory buffer
                 this.outgoing = [];
-                for (let i = 0; i < chans; i++)
-                    this.outgoing.push(new Float32Array(new SharedArrayBuffer(bufSz * 4)));
+                for (let i = 0; i < chans; i++) {
+                    this.outgoing.push(
+                        new Float32Array(
+                            new SharedArrayBuffer(bufSz * 4)
+                        )
+                    );
+                }
                 this.outgoingRW = new Int32Array(new SharedArrayBuffer(8));
 
                 // Tell the worker about our buffers
