@@ -17,6 +17,7 @@
 
 import * as audioBidir from "./audio-bidir";
 import * as audioCapture from "./audio-capture";
+import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as peer from "./peer";
@@ -32,6 +33,10 @@ export async function load() {
 export type AudioCapture = audioCapture.AudioCapture;
 export const AudioCapture = audioCapture.AudioCapture;
 export const createAudioCapture = audioBidir.createAudioCapture;
+
+export type AudioPlayback = audioPlayback.AudioPlayback;
+export const AudioPlayback = audioPlayback.AudioPlayback;
+export const createAudioPlayback = audioBidir.createAudioPlayback;
 
 export type Reliability = net.Reliability;
 export const Reliability = net.Reliability;

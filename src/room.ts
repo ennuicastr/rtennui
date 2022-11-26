@@ -57,13 +57,13 @@ const perPacket = 61440;
  * * track-started-video({peer: number, id: number, element: HTMLElement}):
  *   Video track started.
  * * track-started-audio({
- *       peer: number, id: number, node: AudioNode, sharedNode: AudioNode
+ *       peer: number, id: number, playback: AudioPlayback
  *   }):
  *   Audio track started.
  * * track-ended-video({peer: number, id: number, element: HTMLElement}): Video
  *   track ended.
  * * track-ended-audio({
- *       peer: number, id: number, node: AudioNode, sharedNode: AudioNode
+ *       peer: number, id: number, playback: AudioPlayback
  *   }):
  *   Audio track ended.
  */

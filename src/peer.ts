@@ -685,8 +685,7 @@ export class Peer {
                     this.room.emitEvent("track-started-audio", {
                         peer: this.id,
                         id: i,
-                        node: player.unsharedNode(),
-                        sharedNode: player.sharedNode()
+                        playback: player
                     });
 
                     // Set up the decoder
@@ -750,8 +749,7 @@ export class Peer {
                         this.room.emitEvent("track-ended-audio", {
                             peer: this.id,
                             id: i,
-                            node: player.unsharedNode(),
-                            sharedNode: player.sharedNode()
+                            playback: player
                         });
 
                     }

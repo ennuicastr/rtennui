@@ -77,64 +77,9 @@ export abstract class AudioCapture extends events.EventEmitter {
     }
 
     /**
-     * "Tee" this capture into the number of receivers specified.
-     * @param ct  Number of duplicates to make.
-     */
-    tee(ct: number): AudioCapture[] {
-        let closeCt = 0;
-
-        const onclose = () => {
-            if (++closeCt === ct)
-                this.close();
-        };
-
-        const ret = Array(ct).fill(null).map(() =>
-            new AudioCaptureTee(this));
-
-        for (const tee of ret)
-            tee.onclose = onclose;
-
-        this.on("vad", () => {
-            for (const tee of ret)
-                tee.emitEvent("vad", null);
-        });
-
-        this.on("data", data => {
-            for (let i = 0; i < ct - 1; i++) {
-                const tee = ret[i];
-                tee.emitEvent("data", data.map(x => x.slice(0)));
-            }
-            const tee = ret[ct - 1];
-            tee.emitEvent("data", data);
-        });
-
-        return ret;
-    }
-
-    /**
      * Current VAD state.
      */
     private _vadState: VADState;
-}
-
-/**
- * Tee'd audio capture.
- */
-export class AudioCaptureTee extends AudioCapture {
-    constructor(public readonly parent: AudioCapture) {
-        super();
-    }
-
-    override getSampleRate() { return this.parent.getSampleRate(); }
-
-    override getVADState() { return this.parent.getVADState(); }
-
-    override close() {
-        if (this.onclose)
-            this.onclose();
-    }
-
-    onclose?: () => void;
 }
 
 /**

@@ -64,7 +64,7 @@ export class AudioBidirSP extends AudioBidir {
         this._playback = [];
 
         // Create the script processor
-        const sp = this._sp = _ac.createScriptProcessor(1024, 1, 1);
+        const sp = this._sp = _ac.createScriptProcessor(4096, 1, 1);
 
         // Set up its event
         sp.onaudioprocess = ev => {
@@ -86,18 +86,22 @@ export class AudioBidirSP extends AudioBidir {
 
             // Mix the output
             for (const pb of this._playback) {
-                // Normalize the buffer
-                if (pb._bufferedSamples < outLen)
+                // Check whether it's playing
+                if (!pb._playing && pb._bufLen >= outLen * 2)
+                    pb._playing = true;
+                if (!pb._playing)
                     continue;
-                while (pb._bufferedSamples > outLen * 4) {
-                    pb._bufferedSamples -= pb._buffer[0][0].length;
-                    pb._buffer.shift();
+
+                // Cut the buffer if it's too long
+                while (pb._bufLen > outLen * 4) {
+                    pb._bufLen -= pb._buf[0][0].length;
+                    pb._buf.shift();
                 }
 
-                // Go through buffers
+                // Copy in data
                 let len = 0, remain = outLen;
-                while (remain && pb._buffer.length) {
-                    const inp = pb._buffer[0];
+                while (remain && pb._buf.length) {
+                    const inp = pb._buf[0];
 
                     if (inp[0].length <= remain) {
                         // Use the entire input buffer
@@ -107,8 +111,8 @@ export class AudioBidirSP extends AudioBidir {
                             for (let s = 0; s < ii.length; s++)
                                 oi[len + s] += ii[s];
                         }
-                        pb._bufferedSamples -= inp[0].length;
-                        pb._buffer.shift();
+                        pb._bufLen -= inp[0].length;
+                        pb._buf.shift();
                         len += inp[0].length;
                         remain -= inp[0].length;
 
@@ -122,35 +126,39 @@ export class AudioBidirSP extends AudioBidir {
                         }
                         for (let i = 0; i < inp.length; i++)
                             inp[i] = inp[i].subarray(remain)
-                        pb._bufferedSamples -= remain;
+                        pb._bufLen -= remain;
                         len += remain;
                         remain = 0;
 
                     }
                 }
 
-                // Check for clipping
-                let max = 1;
+                // Possibly stop this one playing
+                if (!pb._buf.length)
+                    pb._playing = false;
+            }
+
+            // Check for clipping
+            let max = 1;
+            for (let i = 0; i < out.length; i++) {
+                const c = out[i];
+                for (let s = 0; s < c.length; s++)
+                    max = Math.max(max, Math.abs(c[s]));
+            }
+            if (max > 1) {
                 for (let i = 0; i < out.length; i++) {
-                    const cmax = Math.max.apply(Math,
-                        Array.prototype.map.apply(
-                            out, Math.abs
-                        )
-                    );
-                    max = Math.max(max, cmax);
-                }
-                if (max > 1) {
-                    for (let i = 0; i < out.length; i++) {
-                        const ch = out[i];
-                        for (let s = 0; s < ch.length; s++)
-                            ch[s] /= max;
-                    }
+                    const c = out[i];
+                    for (let s = 0; s < c.length; s++)
+                        c[s] /= max;
                 }
             }
         };
 
         // Hook it up
+        const n = _ac.createConstantSource();
+        n.connect(sp);
         sp.connect(_ac.destination);
+        n.start();
     }
 
     override createCapture(
@@ -241,14 +249,15 @@ class AudioBidirSPPlayback extends audioPlayback.AudioPlayback {
     ) {
         super();
         this._closed = false;
-        this._bufferedSamples = 0;
-        this._buffer = [];
+        this._bufLen = 0;
+        this._buf = [];
+        this._playing = false;
     }
 
     override play(data: Float32Array[]): void {
         if (!this._closed) {
-            this._bufferedSamples += data[0].length;
-            this._buffer.push(data);
+            this._bufLen += data[0].length;
+            this._buf.push(data);
         }
     }
 
@@ -269,8 +278,8 @@ class AudioBidirSPPlayback extends audioPlayback.AudioPlayback {
             }
         }
         this._closed = true;
-        this._bufferedSamples = 0;
-        this._buffer = [];
+        this._bufLen = 0;
+        this._buf = [];
     }
 
     /**
@@ -282,13 +291,19 @@ class AudioBidirSPPlayback extends audioPlayback.AudioPlayback {
      * Size (in samples) of buffers to play.
      * @private
      */
-    _bufferedSamples: number;
+    _bufLen: number;
 
     /**
      * Buffered data.
      * @private
      */
-    _buffer: Float32Array[][];
+    _buf: Float32Array[][];
+
+    /**
+     * Set while this is playing.
+     * @private
+     */
+    _playing: boolean;
 }
 
 /**

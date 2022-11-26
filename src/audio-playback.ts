@@ -149,8 +149,9 @@ export class AudioPlaybackSP extends AudioPlayback {
     ) {
         super();
 
-        this._bufferedSamples = 0;
-        this._buffer = [];
+        this._bufLen = 0;
+        this._buf = [];
+        this._playing = false;
 
         const sampleRate = _ac.sampleRate;
 
@@ -164,26 +165,29 @@ export class AudioPlaybackSP extends AudioPlayback {
             for (let i = 0; i < outChans; i++)
                 outData.push(ev.outputBuffer.getChannelData(i));
 
-            // If we have less than one buffer, send nothing
-            if (this._bufferedSamples < outData[0].length * 2)
+            // Decide whether to start playing
+            if (!this._playing && this._bufLen >= outData[0].length * 2)
+                this._playing = true;
+
+            if (!this._playing)
                 return;
 
             // If we have too much data, drop some
-            while (this._bufferedSamples > outData[0].length * 4) {
-                this._bufferedSamples -= this._buffer[0][0].length;
-                this._buffer.shift();
+            while (this._bufLen > outData[0].length * 4) {
+                this._bufLen -= this._buf[0][0].length;
+                this._buf.shift();
             }
 
             // Copy in data
             let rd = 0, remain = outData[0].length;
-            while (remain > 0 && this._buffer.length) {
-                const inBuf = this._buffer[0];
+            while (remain > 0 && this._buf.length) {
+                const inBuf = this._buf[0];
                 if (inBuf[0].length <= remain) {
                     // Use this entire buffer
                     for (let i = 0; i < outData.length; i++)
                         outData[i].set(inBuf[i%inBuf.length], rd);
-                    this._bufferedSamples -= inBuf[0].length;
-                    this._buffer.shift();
+                    this._bufLen -= inBuf[0].length;
+                    this._buf.shift();
                     rd += inBuf[0].length;
                     remain -= inBuf[0].length;
 
@@ -197,12 +201,16 @@ export class AudioPlaybackSP extends AudioPlayback {
                     }
                     for (let i = 0; i < inBuf.length; i++)
                         inBuf[i] = inBuf[i].subarray(remain);
-                    this._bufferedSamples -= remain;
+                    this._bufLen -= remain;
                     rd += remain;
                     remain = 0;
 
                 }
             }
+
+            // Possibly we're done playing
+            if (!this._buf.length)
+                this._playing = false;
         };
 
         // Create a null input so it runs
@@ -225,8 +233,8 @@ export class AudioPlaybackSP extends AudioPlayback {
      * Play this audio.
      */
     play(data: Float32Array[]) {
-        this._bufferedSamples += data[0].length;
-        this._buffer.push(data.map(x => x.slice(0)));
+        this._bufLen += data[0].length;
+        this._buf.push(data.map(x => x.slice(0)));
     }
 
     /**
@@ -256,12 +264,17 @@ export class AudioPlaybackSP extends AudioPlayback {
     /**
      * The amount of audio data we have buffered.
      */
-    private _bufferedSamples: number;
+    private _bufLen: number;
 
     /**
      * The buffer of audio data itself.
      */
-    private _buffer: Float32Array[][];
+    private _buf: Float32Array[][];
+
+    /**
+     * Set when we're playing to empty the buffer.
+     */
+    private _playing: boolean;
 }
 
 /**
