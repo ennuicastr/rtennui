@@ -62,6 +62,7 @@ export class AudioBidirSP extends AudioBidir {
         // Set up our buffers
         this._capture = null;
         this._playback = [];
+        this._null = null;
 
         // Create the script processor
         const sp = this._sp = _ac.createScriptProcessor(4096, 1, 1);
@@ -155,7 +156,7 @@ export class AudioBidirSP extends AudioBidir {
         };
 
         // Hook it up
-        const n = _ac.createConstantSource();
+        const n = this._null = _ac.createConstantSource();
         n.connect(sp);
         sp.connect(_ac.destination);
         n.start();
@@ -166,6 +167,11 @@ export class AudioBidirSP extends AudioBidir {
     ): Promise<audioCapture.AudioCapture> {
         if (this._capture)
             this._capture.close();
+        if (this._null) {
+            this._null.stop();
+            this._null.disconnect(this._sp);
+            this._null = null;
+        }
         return Promise.resolve(
             this._capture = new AudioBidirSPCapture(this, mss)
         );
@@ -183,6 +189,11 @@ export class AudioBidirSP extends AudioBidir {
         this._sp.disconnect(this._ac.destination);
         if (this._capture)
             this._capture.close();
+        if (this._null) {
+            this._null.stop();
+            this._null.disconnect(this._sp);
+            this._null = null;
+        }
         for (const pb of this._playback.slice(0))
             pb.close();
     }
@@ -192,6 +203,12 @@ export class AudioBidirSP extends AudioBidir {
      * @private
      */
     _sp: ScriptProcessorNode;
+
+    /**
+     * A null source used before input has begun.
+     * @private
+     */
+    _null: ConstantSourceNode;
 
     /**
      * The associated capture node, if any.
