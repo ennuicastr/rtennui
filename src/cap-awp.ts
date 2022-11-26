@@ -47,17 +47,19 @@ const bufSz = 96000;
 class CaptureProcessor extends AudioWorkletProcessor {
     canShared: boolean;
     setup: boolean;
+    out: MessagePort;
     done: boolean;
 
     /* OUTGOING: a number of shared buffers equal to the number of channels,
      * and a shared read/write head */
     outgoing: Float32Array[];
-    outgoingRW: Int32Array;
+    outgoingH: Int32Array;
 
     constructor(options?: AudioWorkletNodeOptions) {
         super(options);
 
         this.setup = false;
+        this.out = null;
         this.done = false;
 
         // Can we use shared memory?
@@ -66,7 +68,9 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
         this.port.onmessage = ev => {
             const msg = ev.data;
-            if (msg.c === "done")
+            if (msg.c === "out")
+                this.out = msg.p;
+            else if (msg.c === "done")
                 this.done = true;
         };
     }
@@ -79,6 +83,8 @@ class CaptureProcessor extends AudioWorkletProcessor {
         if (this.done)
             return false;
         if (inputs.length === 0 || inputs[0].length === 0)
+            return true;
+        if (!this.out)
             return true;
 
         // SETUP
@@ -96,14 +102,14 @@ class CaptureProcessor extends AudioWorkletProcessor {
                         )
                     );
                 }
-                this.outgoingRW = new Int32Array(new SharedArrayBuffer(8));
+                this.outgoingH = new Int32Array(new SharedArrayBuffer(4));
 
                 // Tell the worker about our buffers
                 console.log("[INFO] AWP: Using shared memory");
-                this.port.postMessage({
+                this.out.postMessage({
                     c: "buffers",
-                    outgoing: this.outgoing,
-                    outgoingRW: this.outgoingRW
+                    buffers: this.outgoing,
+                    head: this.outgoingH
                 });
             } else {
                 console.log("[INFO] AWP: Not using shared memory");
@@ -114,7 +120,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
         const inp = inputs[0];
         if (this.canShared) {
             // Write it into the buffer
-            let writeHead = this.outgoingRW[1];
+            let writeHead = this.outgoingH[0];
             const len = inp[0].length;
             if (writeHead + len > bufSz) {
                 // We wrap around
@@ -129,14 +135,14 @@ class CaptureProcessor extends AudioWorkletProcessor {
                     this.outgoing[i].set(inp[i%inp.length], writeHead);
             }
             writeHead = (writeHead + len) % bufSz;
-            Atomics.store(this.outgoingRW, 1, writeHead);
+            Atomics.store(this.outgoingH, 0, writeHead);
 
             // Notify the worker
-            Atomics.notify(this.outgoingRW, 1);
+            Atomics.notify(this.outgoingH, 0);
 
         } else {
             // Just send the data. Minimize allocation by sending plain.
-            this.port.postMessage(inputs[0]);
+            this.out.postMessage(inputs[0]);
 
         }
 

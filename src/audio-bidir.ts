@@ -351,7 +351,7 @@ export async function createAudioCapture(
 export async function createAudioPlayback(
     ac: AudioContext
 ): Promise<audioPlayback.AudioPlayback> {
-    if (util.isSafari) {
+    if (util.isSafari()) {
         // Use the bidir that was (hopefully) created with the capture
         const acp: AudioContext & {rteAb?: AudioBidir} = ac;
         let ab = acp.rteAb;

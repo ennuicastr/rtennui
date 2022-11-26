@@ -16,7 +16,8 @@
  */
 
 import * as capAwp from "./cap-awp-js";
-import * as capAwpWaiter from "./cap-awp-waiter-js";
+import * as capWorker from "./cap-worker-js";
+import * as capWorkerWaiter from "./cap-worker-waiter-js";
 import * as events from "./events";
 import * as util from "./util";
 
@@ -93,7 +94,7 @@ export class AudioCaptureAWP extends AudioCapture {
         super();
         this._worklet = null;
         this._incoming = null;
-        this._incomingRW = null;
+        this._incomingH = null;
         this._waiter = null;
     }
 
@@ -112,12 +113,25 @@ export class AudioCaptureAWP extends AudioCapture {
         const worklet = this._worklet =
             new AudioWorkletNode(ac, "rtennui-cap");
 
+        // And the worker
+        const worker = this._worker =
+            new Worker(capWorker.js);
+
+        // And a communication channel for them
+        let mc = new MessageChannel();
+        worklet.port.postMessage({c: "out", p: mc.port1}, [mc.port1]);
+        worker.postMessage({c: "in", p: mc.port2}, [mc.port2]);
+
+        // And a communication channel for ourself
+        mc = new MessageChannel();
+        worker.postMessage({c: "out", p: mc.port1, shared: true}, [mc.port1]);
+
         // Wait for messages
-        worklet.port.onmessage = ev => {
+        mc.port2.onmessage = ev => {
             this._onmessage(ev);
         };
 
-        // Connect it up
+        // Connect the worklet up
         this._input.connect(worklet);
         worklet.connect(ac.destination);
     }
@@ -125,7 +139,7 @@ export class AudioCaptureAWP extends AudioCapture {
     override getSampleRate() { return this._ac.sampleRate; }
 
     /**
-     * Message handler for messages from the worklet.
+     * Message handler for messages from the worker.
      */
     private _onmessage(ev: MessageEvent) {
         const msg = ev.data;
@@ -135,15 +149,15 @@ export class AudioCaptureAWP extends AudioCapture {
 
         } else if (msg.c === "buffers") {
             // It's our shared buffers
-            this._incoming = msg.outgoing;
-            this._incomingRW = msg.outgoingRW;
+            this._incoming = msg.buffers;
+            this._incomingH = msg.head;
 
             // Wait for data
-            const waiter = this._waiter = new Worker(capAwpWaiter.js);
+            const waiter = this._waiter = new Worker(capWorkerWaiter.js);
             waiter.onmessage = ev => {
                 this._onwaiter(ev);
             };
-            waiter.postMessage(msg.outgoingRW);
+            waiter.postMessage(msg.head);
 
         }
     }
@@ -195,6 +209,9 @@ export class AudioCaptureAWP extends AudioCapture {
             worklet.port.postMessage({c: "done"});
         }
 
+        if (this._worker)
+            this._worker.terminate();
+
         if (this._waiter)
             this._waiter.terminate();
     }
@@ -205,6 +222,11 @@ export class AudioCaptureAWP extends AudioCapture {
     private _worklet: AudioWorkletNode;
 
     /**
+     * The worklet redirects via a worker.
+     */
+    private _worker: Worker;
+
+    /**
      * Incoming data.
      */
     private _incoming: Float32Array[];
@@ -212,7 +234,7 @@ export class AudioCaptureAWP extends AudioCapture {
     /**
      * Incoming data communication buffer (read position, write position).
      */
-    private _incomingRW: Int32Array;
+    private _incomingH: Int32Array;
 
     /**
      * Worker thread waiting for new incoming data.

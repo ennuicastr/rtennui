@@ -16,12 +16,12 @@
  */
 
 onmessage = ev => {
-    /* Message is the buffer with [read position, write position]. Wait for the
-     * write position to change. */
-    let prevVal = 0;
-    let buf = ev.data;
-    while (Atomics.wait(buf, 1, prevVal)) {
-        const newVal = Atomics.load(buf, 1);
+    /* Message is the buffer the write head. Wait for the write position to
+     * change. */
+    const buf = ev.data;
+    let prevVal = Atomics.load(buf, 0);
+    while (Atomics.wait(buf, 0, prevVal)) {
+        const newVal = Atomics.load(buf, 0);
         if (prevVal !== newVal) {
             postMessage([prevVal, newVal]);
             prevVal = newVal;

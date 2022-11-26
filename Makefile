@@ -1,4 +1,6 @@
-SRC=src/*.ts src/cap-awp-js.ts src/cap-awp-waiter-js.ts src/play-awp-js.ts
+SRC=\
+	src/*.ts src/cap-awp-js.ts src/cap-worker-js.ts \
+	src/cap-worker-waiter-js.ts src/play-awp-js.ts
 
 all: rtennui.js rtennui.min.js
 
