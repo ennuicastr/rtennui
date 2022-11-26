@@ -309,22 +309,26 @@ export class AudioCaptureSP extends AudioCapture {
 }
 
 /**
- * Create an appropriate audio capture from an AudioContext and a MediaStream.
+ * Create an appropriate audio capture from an AudioContext and an input.
  * @param ac  The AudioContext for the nodes.
- * @param ms  The MediaStream from which to create a capture.
+ * @param ms  The MediaStream or AudioNode from which to create a capture.
  */
 export async function createAudioCaptureNoBidir(
-    ac: AudioContext, ms: MediaStream
+    ac: AudioContext, ms: MediaStream | AudioNode
 ): Promise<AudioCapture> {
-    const mss = ac.createMediaStreamSource(ms);
+    let node = <AudioNode> ms;
+    if ((<MediaStream> ms).getAudioTracks) {
+        // Looks like a media stream
+        node = ac.createMediaStreamSource(<MediaStream> ms);
+    }
     if (typeof AudioWorkletNode !== "undefined" &&
         !util.isSafari()) {
-        const ret = new AudioCaptureAWP(ac, mss);
+        const ret = new AudioCaptureAWP(ac, node);
         await ret.init();
         return ret;
 
     } else {
-        return new AudioCaptureSP(ac, mss);
+        return new AudioCaptureSP(ac, node);
 
     }
 }

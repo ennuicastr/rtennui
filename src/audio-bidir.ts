@@ -26,7 +26,7 @@ export abstract class AudioBidir {
     /**
      * Create a new capture node associated with this bidirectional node.
      */
-    abstract createCapture(mss: MediaStreamAudioSourceNode):
+    abstract createCapture(mss: AudioNode):
         Promise<audioCapture.AudioCapture>;
 
     /**
@@ -163,7 +163,7 @@ export class AudioBidirSP extends AudioBidir {
     }
 
     override createCapture(
-        mss: MediaStreamAudioSourceNode
+        mss: AudioNode
     ): Promise<audioCapture.AudioCapture> {
         if (this._capture)
             this._capture.close();
@@ -234,9 +234,9 @@ class AudioBidirSPCapture extends audioCapture.AudioCapture {
         public parent: AudioBidirSP,
 
         /**
-         * The associated MediaStreamAudioSourceNode.
+         * The associated audio source.
          */
-        public mss: MediaStreamAudioSourceNode
+        public mss: AudioNode
     ) {
         super();
         mss.connect(parent._sp);
@@ -326,10 +326,10 @@ class AudioBidirSPPlayback extends audioPlayback.AudioPlayback {
 /**
  * Create an appropriate audio capture from an AudioContext and a MediaStream.
  * @param ac  The AudioContext for the nodes.
- * @param ms  The MediaStream from which to create a capture.
+ * @param ms  The MediaStream or AudioNode from which to create a capture.
  */
 export async function createAudioCapture(
-    ac: AudioContext, ms: MediaStream
+    ac: AudioContext, ms: MediaStream | AudioNode
 ): Promise<audioCapture.AudioCapture> {
     if (util.isSafari()) {
         /* Safari's audio subsystem is not to be trusted. It's why we have
@@ -338,8 +338,12 @@ export async function createAudioCapture(
         let ab = acp.rteAb;
         if (!ab)
             ab = acp.rteAb = new AudioBidirSP(ac);
-        const mss = ac.createMediaStreamSource(ms);
-        return ab.createCapture(mss);
+        let node = <AudioNode> ms;
+        if ((<MediaStream> ms).getAudioTracks) {
+            // Looks like a MediaStream
+            node = ac.createMediaStreamSource(<MediaStream> ms);
+        }
+        return ab.createCapture(node);
     }
 
     return audioCapture.createAudioCaptureNoBidir(ac, ms);
