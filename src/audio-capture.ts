@@ -70,11 +70,21 @@ export abstract class AudioCapture extends events.EventEmitter {
     abstract close(): void;
 
     /**
-     * Redirect data to this MessagePort. This *may* suppress all future "data"
-     * messages, or may not.
+     * Pipe data to this message port, using shared memory if requested (and
+     * possible). Message will be either a Float32Array[] (array of channels),
+     * or, if using shared memory, a single message of the form
+     * {
+     *   c: "buffers",
+     *   buffers: Float32Array[],
+     *   head: Int32Array
+     * }
+     * In the "buffers" case, the buffers are a shared memory buffer, and head
+     * is a write head into each buffer. The writer will update the head with
+     * each write, using the buffers as ring buffers. The receiver must be fast
+     * enough to read the buffers before the ring wraps around.
      */
-    pipe(to: MessagePort) {
-        this.on("data", data => to.postMessage(data, data));
+    pipe(to: MessagePort, shared = false) {
+        this.on("data", data => to.postMessage(data));
     }
 
     /**
@@ -214,6 +224,17 @@ export class AudioCaptureAWP extends AudioCapture {
 
         if (this._waiter)
             this._waiter.terminate();
+    }
+
+    /**
+     * AWPs pipe by having the worker multiplex.
+     */
+    override pipe(to: MessagePort, shared = false) {
+        this._worker.postMessage({
+            c: "out",
+            p: to,
+            shared
+        }, [to]);
     }
 
     /**
