@@ -40,64 +40,66 @@ declare function registerProcessor(
     }
 );
 
+const bufSz = 96000;
+
 // Processor to play data
 class PlaybackProcessor extends AudioWorkletProcessor {
-    connected: boolean;
     playing: boolean;
-    timeout: number;
     done: boolean;
 
-    buf: Float32Array[][];
-    bufLen: number;
+    idealBuf: number;
+    maxBuf: number;
+
+    incoming: Float32Array[];
+    incomingH: Int32Array;
+    readHead: number;
 
     constructor(options?: AudioWorkletNodeOptions) {
         super(options);
 
         const sampleRate = options.parameterData.sampleRate;
 
-        // Skip data if our buffer goes over 20ms
-        const idealBuf = Math.round(sampleRate / 100);
-        const maxBuf = Math.round(sampleRate / 50);
+        // Start assuming unshared, so create our own ring buffer
+        this.incoming = [];
+        this.incomingH = new Int32Array(1);
+        this.readHead = 0;
 
-        this.connected = false;
+        // Generally we'll get 20ms at a time, so our ideal is about 30ms
+        const idealBuf = this.idealBuf = Math.round(sampleRate / 33);
+        this.maxBuf = idealBuf * 2;
+
         this.playing = false;
-        this.timeout = 0;
         this.done = false;
-        this.buf = [];
-        this.bufLen = 0;
 
         this.port.onmessage = ev => {
             const msg = ev.data;
             if (msg.length) {
-                if (this.connected) {
-                    // Check for overrun
-                    if (this.bufLen > maxBuf) {
-                        while (this.bufLen > idealBuf) {
-                            // Skip some data
-                            const rem = this.bufLen - idealBuf;
-                            const part = this.buf[0];
-                            const partLen = part[0].length;
-                            if (partLen > rem) {
-                                // Just remove part
-                                for (let i = 0; i < part.length; i++)
-                                    part[i] = part[i].subarray(rem);
-                                this.bufLen -= rem;
-                            } else {
-                                // Remove this whole part
-                                this.buf.shift();
-                                this.bufLen -= partLen;
-                            }
-                        }
+                // Raw data. Add it to the unshared buffer.
+                const incoming = this.incoming;
+                while (incoming.length < msg.length)
+                    incoming.push(new Float32Array(bufSz));
+                let writeHead = this.incomingH[0];
+                const len = msg[0].length;
+                if (writeHead + len > bufSz) {
+                    // We wrap around
+                    const brk = bufSz - writeHead;
+                    for (let i = 0; i < msg.length; i++) {
+                        incoming[i].set(msg[i].subarray(0, brk), writeHead);
+                        incoming[i].set(msg[i].subarray(brk), 0);
                     }
-
-                    // Now accept this part
-                    this.buf.push(msg);
-                    this.bufLen += msg[0].length;
-                    if (!this.playing && this.buf.length === 1) {
-                        this.playing = true;
-                        this.timeout = idealBuf;
-                    }
+                } else {
+                    // Simple case
+                    for (let i = 0; i < msg.length; i++)
+                        incoming[i].set(msg[i], writeHead);
                 }
+                writeHead = (writeHead + len) % bufSz;
+                this.incomingH[0] = writeHead;
+
+            } else if (msg.c === "buffers") {
+                // Use their buffers
+                this.incoming = msg.buffers;
+                this.incomingH = msg.head;
+                this.readHead = Atomics.load(msg.head, 0);
 
             } else if (msg.c === "done") {
                 this.done = true;
@@ -107,54 +109,80 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>) {
+    process(
+        inputs: Float32Array[][], outputs: Float32Array[][],
+        parameters: Record<string, Float32Array>
+    ) {
         if (this.done)
             return false;
-        this.connected = true;
-        if (!this.playing)
+        if (outputs.length === 0 || outputs[0].length === 0 ||
+            this.incoming.length === 0)
             return true;
 
+        const writeHead = (typeof Atomics !== "undefined") ?
+            Atomics.load(this.incomingH, 0) :
+            this.incomingH[0];
+        let readHead = this.readHead;
+        const incoming = this.incoming;
+        let inLen = writeHead - readHead;
+        if (inLen < 0)
+            inLen += incoming[0].length;
         const out = outputs[0];
+        const outLen = out[0].length;
 
-        // Wait for data to buffer
-        if (this.timeout > 0) {
-            this.timeout -= out[0].length;
-            return true;
+        /*
+        if (!this.playing) {
+            // Check whether we should start playing
+            if (inLen >= this.idealBuf)
+                this.playing = true;
+            else
+                return true;
         }
 
-        // Perhaps end playback
-        if (this.buf.length === 0) {
+        // Check if we have too much data
+        if (inLen >= this.maxBuf) {
+            // Move up the read head
+            readHead = (readHead + inLen - this.idealBuf) % incoming[0].length;
+            inLen = this.idealBuf;
+        }
+
+        // Or too little
+        if (inLen === 0) {
             this.playing = false;
             return true;
         }
+        */
 
         // Play some data
-        const len = out[0].length;
-        let idx = 0, rem = len;
-        while (idx < len && this.buf.length) {
-            const part = this.buf[0];
-            if (part[0].length > rem) {
-                // Just use part of it
-                for (let i = 0; i < out.length; i++)
-                    out[i].set(part[i%part.length].subarray(0, rem), idx);
-                for (let i = 0; i < part.length; i++)
-                    part[i] = part[i].subarray(rem);
-                idx = len;
-                rem = 0;
-                this.bufLen -= len;
-
-            } else {
-                // Use the rest of it
-                const partLen = part[0].length;
-                for (let i = 0; i < out.length; i++)
-                    out[i].set(part[i%part.length], idx);
-                idx += partLen;
-                rem -= partLen;
-                this.buf.shift();
-                this.bufLen -= partLen;
-
+        const len = Math.min(inLen, outLen);
+        if (readHead + len > incoming[0].length) {
+            // This wraps around the input data, so read in two goes
+            const brk = incoming[0].length - readHead;
+            for (let i = 0; i < out.length; i++) {
+                out[i].set(
+                    incoming[i%incoming.length].subarray(readHead)
+                );
+                out[i].set(
+                    incoming[i%incoming.length].subarray(0, len - brk),
+                    brk
+                );
             }
+
+        } else {
+            // Read this much of the input
+            for (let i = 0; i < out.length; i++) {
+                out[i].set(
+                    incoming[i%incoming.length].subarray(
+                        readHead, readHead + len
+                    )
+                );
+            }
+
         }
+
+        this.readHead = readHead = (readHead + len) % incoming[0].length;
+        if (readHead === writeHead)
+            this.playing = false;
 
         return true;
     }
