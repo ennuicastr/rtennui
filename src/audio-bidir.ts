@@ -366,3 +366,10 @@ export async function createAudioPlayback(
 
     return audioPlayback.createAudioPlaybackNoBidir(ac);
 }
+
+/**
+ * Test for whether a shared, bidirectional node will be used.
+ */
+export function audioCapturePlaybackShared() {
+    return util.isSafari();
+}
