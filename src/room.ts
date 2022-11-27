@@ -17,6 +17,7 @@
 
 import * as abstractRoom from "./abstract-room";
 import * as audioCapture from "./audio-capture";
+import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as outgoingVideoStream from "./outgoing-video-stream";
@@ -69,7 +70,22 @@ const perPacket = 61440;
  */
 export class Connection extends abstractRoom.AbstractRoom {
     constructor(
-        private _ac: AudioContext
+        /**
+         * The audio context to use for all audio.
+         */
+        private _ac: AudioContext,
+
+        /**
+         * Optional extra options.
+         */
+        private _opts: {
+            /**
+             * Substitute createAudioPlayback to use in place of the built-in
+             * one. Allowed to return null.
+             */
+            createAudioPlayback?:
+                (ac: AudioContext) => Promise<audioPlayback.AudioPlayback>
+        } = {}
     ) {
         super();
         this._streamId = 0;
@@ -493,7 +509,8 @@ export class Connection extends abstractRoom.AbstractRoom {
                 const id = msg.getUint8(p.id);
                 const dataJSON = util.decodeText(
                     (new Uint8Array(msg.buffer)).subarray(p.data));
-                peerO.newStream(this._ac, id, JSON.parse(dataJSON));
+                peerO.newStream(this._ac, id, JSON.parse(dataJSON),
+                    this._opts);
                 break;
             }
 

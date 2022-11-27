@@ -23,7 +23,7 @@ import * as util from "./util";
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
 /**
- * General interface for any audio playback subsystem.
+ * General interface for any audio playback subsystem, user implementable.
  */
 export abstract class AudioPlayback extends events.EventEmitter {
     constructor() {

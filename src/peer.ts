@@ -594,8 +594,9 @@ export class Peer {
      * @param ac  AudioContext on which to play the stream.
      * @param id  ID of the stream.
      * @param info  Track info given by the peer.
+     * @param opts  Room options.
      */
-    async newStream(ac: AudioContext, id: number, info: any) {
+    async newStream(ac: AudioContext, id: number, info: any, opts: any) {
         this.closeStream();
 
         this.promise = this.promise.then(async () => {
@@ -679,8 +680,12 @@ export class Peer {
                     if (!env) continue;
 
                     // Set up the player
-                    const player = track.player =
-                        await audioBidir.createAudioPlayback(ac);
+                    let player: audioPlayback.AudioPlayback = null;
+                    if (opts.createAudioPlayback)
+                        player = await opts.createAudioPlayback(ac);
+                    if (!player)
+                        player = await audioBidir.createAudioPlayback(ac);
+                    track.player = player;
 
                     this.room.emitEvent("track-started-audio", {
                         peer: this.id,
