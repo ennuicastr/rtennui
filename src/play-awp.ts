@@ -130,7 +130,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         const out = outputs[0];
         const outLen = out[0].length;
 
-        /*
         if (!this.playing) {
             // Check whether we should start playing
             if (inLen >= this.idealBuf)
@@ -151,7 +150,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
             this.playing = false;
             return true;
         }
-        */
 
         // Play some data
         const len = Math.min(inLen, outLen);
