@@ -72,40 +72,52 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this.done = false;
 
         this.port.onmessage = ev => {
-            const msg = ev.data;
-            if (msg.length) {
-                // Raw data. Add it to the unshared buffer.
-                const incoming = this.incoming;
-                while (incoming.length < msg.length)
-                    incoming.push(new Float32Array(bufSz));
-                let writeHead = this.incomingH[0];
-                const len = msg[0].length;
-                if (writeHead + len > bufSz) {
-                    // We wrap around
-                    const brk = bufSz - writeHead;
-                    for (let i = 0; i < msg.length; i++) {
-                        incoming[i].set(msg[i].subarray(0, brk), writeHead);
-                        incoming[i].set(msg[i].subarray(brk), 0);
-                    }
-                } else {
-                    // Simple case
-                    for (let i = 0; i < msg.length; i++)
-                        incoming[i].set(msg[i], writeHead);
-                }
-                writeHead = (writeHead + len) % bufSz;
-                this.incomingH[0] = writeHead;
-
-            } else if (msg.c === "buffers") {
-                // Use their buffers
-                this.incoming = msg.buffers;
-                this.incomingH = msg.head;
-                this.readHead = Atomics.load(msg.head, 0);
-
-            } else if (msg.c === "done") {
-                this.done = true;
-
-            }
+            this.onmessage(ev);
         };
+    }
+
+    /**
+     * Message handler from any input port.
+     */
+    onmessage(ev: MessageEvent) {
+        const msg = ev.data;
+        if (msg.length) {
+            // Raw data. Add it to the unshared buffer.
+            const incoming = this.incoming;
+            while (incoming.length < msg.length)
+                incoming.push(new Float32Array(bufSz));
+            let writeHead = this.incomingH[0];
+            const len = msg[0].length;
+            if (writeHead + len > bufSz) {
+                // We wrap around
+                const brk = bufSz - writeHead;
+                for (let i = 0; i < msg.length; i++) {
+                    incoming[i].set(msg[i].subarray(0, brk), writeHead);
+                    incoming[i].set(msg[i].subarray(brk), 0);
+                }
+            } else {
+                // Simple case
+                for (let i = 0; i < msg.length; i++)
+                    incoming[i].set(msg[i], writeHead);
+            }
+            writeHead = (writeHead + len) % bufSz;
+            this.incomingH[0] = writeHead;
+
+        } else if (msg.c === "buffers") {
+            // Use their buffers
+            this.incoming = msg.buffers;
+            this.incomingH = msg.head;
+            this.readHead = Atomics.load(msg.head, 0);
+
+        } else if (msg.c === "in") {
+            msg.p.onmessage = ev => {
+                this.onmessage(ev);
+            };
+
+        } else if (msg.c === "done") {
+            this.done = true;
+
+        }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

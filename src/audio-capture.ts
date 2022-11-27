@@ -176,6 +176,7 @@ export class AudioCaptureAWP extends AudioCapture {
             // Wait for data
             const waiter = this._waiter = new Worker(capWorkerWaiter.js);
             waiter.onmessage = ev => {
+                (<any> window).Atomics.load(this._incomingH, 0);
                 this._onwaiter(ev);
             };
             waiter.postMessage(msg.head);

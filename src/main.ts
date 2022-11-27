@@ -38,6 +38,8 @@ export type AudioPlayback = audioPlayback.AudioPlayback;
 export const AudioPlayback = audioPlayback.AudioPlayback;
 export const createAudioPlayback = audioBidir.createAudioPlayback;
 
+export const audioCapturePlaybackShared = audioBidir.audioCapturePlaybackShared;
+
 export type Reliability = net.Reliability;
 export const Reliability = net.Reliability;
 

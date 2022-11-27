@@ -15,6 +15,7 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+import * as capWorkerWaiter from "./cap-worker-waiter-js";
 import * as playAwp from "./play-awp-js";
 import * as events from "./events";
 import * as util from "./util";
@@ -33,6 +34,42 @@ export abstract class AudioPlayback extends events.EventEmitter {
      * Play this audio.
      */
     abstract play(data: Float32Array[]): void;
+
+    /**
+     * Pipe audio from this message port. Same format as pipe() in
+     * AudioCapture.
+     */
+    pipeFrom(port: MessagePort): void {
+        port.addEventListener("message", ev => {
+            const msg = ev.data;
+
+            if (msg.length) {
+                // Raw data. Just play it.
+                this.play(msg);
+
+            } else if (msg.c === "buffers") {
+                const incoming: Float32Array[] = msg.buffers;
+                const incomingH: Int32Array = msg.head;
+
+                // Wait for data
+                // FIXME: Need to destroy this if the playback is stopped
+                const waiter = new Worker(capWorkerWaiter.js);
+                waiter.onmessage = ev => {
+                    const [lo, hi]: [number, number] = ev.data;
+                    // Make sure there's a memory fence in this thread
+                    (<any> window).Atomics.load(incomingH, 0);
+                    if (hi > lo) {
+                        this.play(incoming.map(x => x.slice(lo, hi)));
+                    } else {
+                        this.play(incoming.map(x => x.slice(lo)));
+                        this.play(incoming.map(x => x.slice(0, hi)));
+                    }
+                };
+                waiter.postMessage(incomingH);
+
+            }
+        });
+    }
 
     /**
      * Get the underlying number of channels.
@@ -102,6 +139,13 @@ export class AudioPlaybackAWP extends AudioPlayback {
      */
     play(data: Float32Array[]) {
         this._worklet.port.postMessage(data, data.map(x => x.buffer));
+    }
+
+    /**
+     * We can connect a message port directly.
+     */
+    override pipeFrom(port: MessagePort) {
+        this._worklet.port.postMessage({c: "in", p: port}, [port]);
     }
 
     /**
