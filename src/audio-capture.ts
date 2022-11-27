@@ -98,7 +98,7 @@ export abstract class AudioCapture extends events.EventEmitter {
  */
 export class AudioCaptureAWP extends AudioCapture {
     constructor(
-        private _ac: AudioContext & {rteHaveCapWorklet?: boolean},
+        private _ac: AudioContext & {rteCapWorklet?: Promise<unknown>},
         private _input: AudioNode
     ) {
         super();
@@ -114,10 +114,9 @@ export class AudioCaptureAWP extends AudioCapture {
     async init() {
         const ac = this._ac;
 
-        if (!ac.rteHaveCapWorklet) {
-            await ac.audioWorklet.addModule(capAwp.js);
-            ac.rteHaveCapWorklet = true;
-        }
+        if (!ac.rteCapWorklet)
+            ac.rteCapWorklet = ac.audioWorklet.addModule(capAwp.js);
+        await ac.rteCapWorklet;
 
         // Create the worklet
         const worklet = this._worklet =
