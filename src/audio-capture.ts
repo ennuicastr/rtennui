@@ -121,7 +121,11 @@ export class AudioCaptureAWP extends AudioCapture {
 
         // Create the worklet
         const worklet = this._worklet =
-            new AudioWorkletNode(ac, "rtennui-cap");
+            new AudioWorkletNode(ac, "rtennui-cap", {
+                /* 2 inputs on Firefox because when input is muted, it doesn't
+                 * run the processor at all, but we'd rather have 0s. */
+                numberOfInputs: util.isFirefox() ? 2 : 1
+            });
 
         // And the worker
         const worker = this._worker =
@@ -144,6 +148,13 @@ export class AudioCaptureAWP extends AudioCapture {
         // Connect the worklet up
         this._input.connect(worklet);
         worklet.connect(ac.destination);
+
+        // On Firefox, also give it null input
+        if (util.isFirefox()) {
+            const n = ac.createConstantSource();
+            n.connect(worklet, 0, 1);
+            n.start();
+        }
     }
 
     override getSampleRate() { return this._ac.sampleRate; }

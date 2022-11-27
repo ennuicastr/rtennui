@@ -82,14 +82,23 @@ class CaptureProcessor extends AudioWorkletProcessor {
     ) {
         if (this.done)
             return false;
-        if (inputs.length === 0 || inputs[0].length === 0)
+        if (inputs.length === 0)
             return true;
         if (!this.out)
             return true;
 
+        // Look for a non-empty input
+        let inputIndex = 0;
+        for (; inputIndex < inputs.length &&
+               inputs[inputIndex].length === 0;
+               inputIndex++) {}
+        if (inputIndex >= inputs.length)
+            return true;
+        const inp = inputs[inputIndex];
+
         // SETUP
         if (!this.setup) {
-            const chans = inputs[0].length;
+            const chans = inp.length;
             this.setup = true;
 
             if (this.canShared) {
@@ -117,7 +126,6 @@ class CaptureProcessor extends AudioWorkletProcessor {
         }
 
         // Transmit our current data
-        const inp = inputs[0];
         if (this.canShared) {
             // Write it into the buffer
             let writeHead = this.outgoingH[0];
@@ -142,7 +150,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
         } else {
             // Just send the data. Minimize allocation by sending plain.
-            this.out.postMessage(inputs[0]);
+            this.out.postMessage(inp);
 
         }
 
