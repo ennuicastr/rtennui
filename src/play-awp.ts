@@ -61,7 +61,9 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         // Start assuming unshared, so create our own ring buffer
         this.incoming = [];
-        this.incomingH = new Int32Array(1);
+        this.incomingH = (typeof SharedArrayBuffer !== "undefined")
+            ? new Int32Array(new SharedArrayBuffer(4))
+            : new Int32Array(1);
         this.readHead = 0;
 
         // Generally we'll get 20ms at a time, so our ideal is about 30ms
