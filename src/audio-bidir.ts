@@ -65,7 +65,7 @@ export class AudioBidirSP extends AudioBidir {
         this._null = null;
 
         // Create the script processor
-        const sp = this._sp = _ac.createScriptProcessor(4096, 1, 1);
+        const sp = this._sp = _ac.createScriptProcessor(1024, 1, 1);
 
         // Set up its event
         sp.onaudioprocess = ev => {
@@ -79,11 +79,10 @@ export class AudioBidirSP extends AudioBidir {
                 return;
 
             // Get our output buffers
-            const out: Float32Array[] = [];
-            for (let i = 0; i < ev.outputBuffer.numberOfChannels; i++) {
-                out.push(ev.outputBuffer.getChannelData(i));
-            }
-            const outLen = out[0].length;
+            const outData: Float32Array[] = [];
+            for (let i = 0; i < ev.outputBuffer.numberOfChannels; i++)
+                outData.push(ev.outputBuffer.getChannelData(i));
+            const outLen = outData[0].length;
 
             // Mix the output
             for (const pb of this._playback) {
@@ -100,35 +99,34 @@ export class AudioBidirSP extends AudioBidir {
                 }
 
                 // Copy in data
-                let len = 0, remain = outLen;
-                while (remain && pb._buf.length) {
-                    const inp = pb._buf[0];
-
-                    if (inp[0].length <= remain) {
-                        // Use the entire input buffer
-                        for (let i = 0; i < out.length; i++) {
-                            const oi = out[i];
-                            const ii = inp[i%inp.length];
+                let rd = 0, remain = outData[0].length;
+                while (remain > 0 && pb._buf.length) {
+                    const inBuf = pb._buf[0];
+                    if (inBuf[0].length <= remain) {
+                        // Use this entire buffer
+                        for (let i = 0; i < outData.length; i++) {
+                            const oi = outData[i];
+                            const ii = inBuf[i%inBuf.length];
                             for (let s = 0; s < ii.length; s++)
-                                oi[len + s] += ii[s];
+                                oi[rd + s] += ii[s];
                         }
-                        pb._bufLen -= inp[0].length;
+                        pb._bufLen -= inBuf[0].length;
                         pb._buf.shift();
-                        len += inp[0].length;
-                        remain -= inp[0].length;
+                        rd += inBuf[0].length;
+                        remain -= inBuf[0].length;
 
-                    } else {
-                        // Use part of the input buffer
-                        for (let i = 0; i < out.length; i++) {
-                            const oi = out[i];
-                            const ii = inp[i%inp.length];
+                    } else { // inBuf too big
+                        // Use part of this buffer
+                        for (let i = 0; i < outData.length; i++) {
+                            const oi = outData[i];
+                            const ii = inBuf[i%inBuf.length];
                             for (let s = 0; s < remain; s++)
-                                oi[len + s] += ii[s];
+                                oi[rd + s] += ii[s];
                         }
-                        for (let i = 0; i < inp.length; i++)
-                            inp[i] = inp[i].subarray(remain)
+                        for (let i = 0; i < inBuf.length; i++)
+                            inBuf[i] = inBuf[i].subarray(remain);
                         pb._bufLen -= remain;
-                        len += remain;
+                        rd += remain;
                         remain = 0;
 
                     }
@@ -141,14 +139,14 @@ export class AudioBidirSP extends AudioBidir {
 
             // Check for clipping
             let max = 1;
-            for (let i = 0; i < out.length; i++) {
-                const c = out[i];
+            for (let i = 0; i < outData.length; i++) {
+                const c = outData[i];
                 for (let s = 0; s < c.length; s++)
                     max = Math.max(max, Math.abs(c[s]));
             }
             if (max > 1) {
-                for (let i = 0; i < out.length; i++) {
-                    const c = out[i];
+                for (let i = 0; i < outData.length; i++) {
+                    const c = outData[i];
                     for (let s = 0; s < c.length; s++)
                         c[s] /= max;
                 }
@@ -324,6 +322,15 @@ class AudioBidirSPPlayback extends audioPlayback.AudioPlayback {
 }
 
 /**
+ * Test for whether a shared, bidirectional node will be used.
+ */
+export function audioCapturePlaybackShared() {
+    /* Safari's whole audio subsystem is a mess. Doing anything more than one
+     * shared node is a recipe for disaster. */
+    return util.isSafari();
+}
+
+/**
  * Create an appropriate audio capture from an AudioContext and a MediaStream.
  * @param ac  The AudioContext for the nodes.
  * @param ms  The MediaStream or AudioNode from which to create a capture.
@@ -331,7 +338,7 @@ class AudioBidirSPPlayback extends audioPlayback.AudioPlayback {
 export async function createAudioCapture(
     ac: AudioContext, ms: MediaStream | AudioNode
 ): Promise<audioCapture.AudioCapture> {
-    if (util.isSafari()) {
+    if (audioCapturePlaybackShared()) {
         /* Safari's audio subsystem is not to be trusted. It's why we have
          * bidirection capture/playback. */
         const acp: AudioContext & {rteAb?: AudioBidir} = ac;
@@ -355,7 +362,7 @@ export async function createAudioCapture(
 export async function createAudioPlayback(
     ac: AudioContext
 ): Promise<audioPlayback.AudioPlayback> {
-    if (util.isSafari()) {
+    if (audioCapturePlaybackShared()) {
         // Use the bidir that was (hopefully) created with the capture
         const acp: AudioContext & {rteAb?: AudioBidir} = ac;
         let ab = acp.rteAb;
@@ -367,9 +374,3 @@ export async function createAudioPlayback(
     return audioPlayback.createAudioPlaybackNoBidir(ac);
 }
 
-/**
- * Test for whether a shared, bidirectional node will be used.
- */
-export function audioCapturePlaybackShared() {
-    return util.isSafari();
-}

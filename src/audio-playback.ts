@@ -40,7 +40,7 @@ export abstract class AudioPlayback extends events.EventEmitter {
      * AudioCapture.
      */
     pipeFrom(port: MessagePort): void {
-        port.addEventListener("message", ev => {
+        port.onmessage = ev => {
             const msg = ev.data;
 
             if (msg.length) {
@@ -68,7 +68,7 @@ export abstract class AudioPlayback extends events.EventEmitter {
                 waiter.postMessage(incomingH);
 
             }
-        });
+        };
     }
 
     /**
