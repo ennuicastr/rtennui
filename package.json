@@ -2,7 +2,7 @@
   "name": "rtennui",
   "version": "0.2.0",
   "description": "A portable replacement for WebRTC's media component",
-  "main": "rtennui.min.js",
+  "main": "rtennui.js",
   "types": "src/main.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
