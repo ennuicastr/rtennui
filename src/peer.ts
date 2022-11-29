@@ -600,13 +600,11 @@ export class Peer {
         this.closeStream();
 
         this.promise = this.promise.then(async () => {
-            this.streamId = id;
             this.playing = false;
-            this.stream = info;
             this.data = [];
             this.offset = 0;
 
-            const tracks: Track[] = this.tracks =
+            const tracks: Track[] =
                 info.map(() => new Track);
 
             this.room.emitEvent("stream-started", {
@@ -722,6 +720,10 @@ export class Peer {
                 }
 
             }
+
+            this.streamId = id;
+            this.stream = info;
+            this.tracks = tracks;
         }).catch(console.error);
 
         await this.promise;
