@@ -151,6 +151,7 @@ export class AudioCaptureAWP extends AudioCapture {
         // On Firefox, also give it null input
         if (util.isFirefox()) {
             const n = ac.createConstantSource();
+            n.offset.value = 0;
             n.connect(worklet, 0, 1);
             n.start();
         }

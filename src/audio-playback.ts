@@ -130,7 +130,9 @@ export class AudioPlaybackAWP extends AudioPlayback {
 
         // Connect it up
         const input = this._input = ac.createConstantSource();
+        input.offset.value = 0;
         input.connect(worklet);
+        input.start();
     }
 
     /**
@@ -259,6 +261,7 @@ export class AudioPlaybackSP extends AudioPlayback {
 
         // Create a null input so it runs
         const nullInput = this._nullInput = _ac.createConstantSource();
+        nullInput.offset.value = 0;
 
         // Connect it up
         nullInput.connect(sp);

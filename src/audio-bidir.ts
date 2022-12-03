@@ -155,6 +155,7 @@ export class AudioBidirSP extends AudioBidir {
 
         // Hook it up
         const n = this._null = _ac.createConstantSource();
+        n.offset.value = 0;
         n.connect(sp);
         sp.connect(_ac.destination);
         n.start();
