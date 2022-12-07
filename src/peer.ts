@@ -570,7 +570,11 @@ export class Peer {
      * @private
      */
     idealBufferMs() {
-        if (!this.reliable || !this._incomingReliable || this.pongs.length < idealPings) {
+        if (
+            this.reliability < net.Reliability.SEMIRELIABLE ||
+            !this.reliable || !this._incomingReliable ||
+            this.pongs.length < idealPings
+        ) {
             // No reliable connection, so use the default
             return 100;
         }

@@ -65,13 +65,14 @@ export class AudioBidirSP extends AudioBidir {
         this._null = null;
 
         // Create the script processor
-        const sp = this._sp = _ac.createScriptProcessor(1024, 1, 1);
+        const sp = this._sp = _ac.createScriptProcessor(
+            util.bugLargeBuffers() ? 4096 : 1024, 1, 1);
 
         // Set up its event
         sp.onaudioprocess = ev => {
             if (this._capture) {
-                this._capture.emitEvent(
-                    "data", [ev.inputBuffer.getChannelData(0)]);
+                this._capture._data.push(
+                    ev.inputBuffer.getChannelData(0).slice(0));
             }
 
             const pbs = this._playback.length;
@@ -222,6 +223,9 @@ export class AudioBidirSP extends AudioBidir {
     _playback: AudioBidirSPPlayback[];
 }
 
+// Interval that's close enough to AWN for most purposes
+const captureInterval = 256;
+
 /**
  * Capture node using a shared script processor.
  */
@@ -238,6 +242,10 @@ class AudioBidirSPCapture extends audioCapture.AudioCapture {
         public mss: AudioNode
     ) {
         super();
+        this._data = [];
+        this._interval = setInterval(
+            () => this.emitData(),
+            captureInterval * 875 / parent._ac.sampleRate);
         mss.connect(parent._sp);
     }
 
@@ -249,8 +257,37 @@ class AudioBidirSPCapture extends audioCapture.AudioCapture {
         if (this.parent._capture === this) {
             this.parent._capture = null;
             this.mss.disconnect(this.parent._sp);
+            clearInterval(this._interval);
         }
     }
+
+    /**
+     * Send some data.
+     */
+    emitData() {
+        if (!this._data.length)
+            return;
+        const data = this._data[0];
+        if (data.length > captureInterval) {
+            this.emitEvent("data", [data.slice(0, captureInterval)]);
+            this._data[0] = data.subarray(captureInterval);
+        } else {
+            this.emitEvent("data", [data]);
+            this._data.shift();
+        }
+    }
+
+    /**
+     * Data to be sent.
+     * @private
+     */
+    _data: Float32Array[];
+
+    /**
+     * Interval timer sending data.
+     * @private
+     */
+    _interval: number;
 }
 
 /**
@@ -325,11 +362,7 @@ class AudioBidirSPPlayback extends audioPlayback.AudioPlayback {
 /**
  * Test for whether a shared, bidirectional node will be used.
  */
-export function audioCapturePlaybackShared() {
-    /* Safari's whole audio subsystem is a mess. Doing anything more than one
-     * shared node is a recipe for disaster. */
-    return util.isSafari();
-}
+export const audioCapturePlaybackShared = util.bugNeedSharedNodes;
 
 /**
  * Create an appropriate audio capture from an AudioContext and a MediaStream.
