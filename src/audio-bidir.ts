@@ -64,6 +64,9 @@ export class AudioBidirSP extends AudioBidir {
         this._playback = [];
         this._null = null;
 
+        const sampleRate = _ac.sampleRate;
+        const maxBuf = sampleRate >> 1;
+
         // Create the script processor
         const sp = this._sp = _ac.createScriptProcessor(
             util.bugLargeBuffers() ? 4096 : 1024, 1, 1);
@@ -94,7 +97,7 @@ export class AudioBidirSP extends AudioBidir {
                     continue;
 
                 // Cut the buffer if it's too long
-                while (pb._bufLen > outLen * 4) {
+                while (pb._bufLen >= maxBuf) {
                     pb._bufLen -= pb._buf[0][0].length;
                     pb._buf.shift();
                 }

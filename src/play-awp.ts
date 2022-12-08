@@ -68,7 +68,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         // Generally we'll get 20ms at a time, so our ideal is about 30ms
         const idealBuf = this.idealBuf = Math.round(sampleRate / 33);
-        this.maxBuf = idealBuf * 2;
+        this.maxBuf = bufSz >> 1;
 
         this.playing = false;
         this.done = false;
