@@ -570,7 +570,11 @@ export class Peer {
      * @private
      */
     idealBufferMs() {
-        if (!this.reliable || !this._incomingReliable || this.pongs.length < idealPings) {
+        if (
+            this.reliability < net.Reliability.SEMIRELIABLE ||
+            !this.reliable || !this._incomingReliable ||
+            this.pongs.length < idealPings
+        ) {
             // No reliable connection, so use the default
             return 100;
         }
@@ -1022,9 +1026,10 @@ export class Peer {
                     format: resampler.AV_SAMPLE_FMT_FLTP,
                     sample_rate: 48000,
                     channel_layout: 4,
-                    pts: 0,
+                    pts: decoder.pts,
                     ptshi: 0
                 };
+                decoder.pts += buf.length;
 
                 // Resample it
                 const fframes =
@@ -1516,6 +1521,7 @@ class Decoder {
         this.decoder = null;
         this.waiters = [];
         this.buf = [];
+        this.pts = 0;
     }
 
     /**
@@ -1612,4 +1618,5 @@ class Decoder {
     decoder: wcp.AudioDecoder | wcp.VideoDecoder;
     waiters: (() => void)[];
     buf: (wcp.AudioData | wcp.VideoFrame)[];
+    pts: number;
 }

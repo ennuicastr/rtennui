@@ -141,3 +141,30 @@ export function isSafari(): boolean {
 export function isFirefox(): boolean {
     return navigator.userAgent.indexOf("Firefox") >= 0;
 }
+
+/**
+ * True if this browser is on Android. Used to work around some
+ * Android-Chrome-specific bugs.
+ */
+export function isAndroid(): boolean {
+    return navigator.userAgent.indexOf("Android") >= 0;
+}
+
+/**
+ * Bug workaround check: True if we need to use shared audio nodes. This is
+ * true on Safari because its audio subsystem becomes incredibly fragile if you
+ * have more than one AWN or more than one SP, and true on Chrome+Android
+ * because its scheduler is insufficient for realtime audio.
+ */
+export function bugNeedSharedNodes(): boolean {
+    return isSafari() || (isAndroid() && isChrome());
+}
+
+/**
+ * Bug workaround check: True if we need very large buffers. This is true on
+ * Chrome on Safari because its scheduler is bad, and audio nodes will lose
+ * audio if their timing is this off.
+ */
+export function bugLargeBuffers(): boolean {
+    return isAndroid() && isChrome();
+}

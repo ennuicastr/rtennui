@@ -200,6 +200,7 @@ export class AudioPlaybackSP extends AudioPlayback {
         this._playing = false;
 
         const sampleRate = _ac.sampleRate;
+        const maxBuf = sampleRate >> 1;
 
         // Create the ScriptProcessor
         const sp = this._sp =
@@ -219,7 +220,7 @@ export class AudioPlaybackSP extends AudioPlayback {
                 return;
 
             // If we have too much data, drop some
-            while (this._bufLen > outData[0].length * 4) {
+            while (this._bufLen >= maxBuf) {
                 this._bufLen -= this._buf[0][0].length;
                 this._buf.shift();
             }
