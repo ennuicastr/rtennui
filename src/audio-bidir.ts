@@ -270,14 +270,19 @@ class AudioBidirSPCapture extends audioCapture.AudioCapture {
     emitData() {
         if (!this._data.length)
             return;
-        const data = this._data[0];
-        if (data.length > captureInterval) {
-            this.emitEvent("data", [data.slice(0, captureInterval)]);
-            this._data[0] = data.subarray(captureInterval);
-        } else {
-            this.emitEvent("data", [data]);
-            this._data.shift();
-        }
+        const maxBuffers =
+            (util.bugLargeBuffers() ? 4096 : 1024) /
+            captureInterval;
+        do {
+            const data = this._data[0];
+            if (data.length > captureInterval) {
+                this.emitEvent("data", [data.slice(0, captureInterval)]);
+                this._data[0] = data.subarray(captureInterval);
+            } else {
+                this.emitEvent("data", [data]);
+                this._data.shift();
+            }
+        } while (this._data.length > maxBuffers);
     }
 
     /**
