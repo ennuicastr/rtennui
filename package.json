@@ -24,8 +24,9 @@
     "libavjs-webcodecs-polyfill": "^0.2.8"
   },
   "devDependencies": {
+    "browser-pack-flat": "^3.5.0",
     "browserify": "^17.0.0",
-    "tinyify": "^3.0.0",
+    "minify-stream": "^2.1.0",
     "tsify": "^5.0.4",
     "typescript": "^4.5.2"
   }
