@@ -626,48 +626,54 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Send data.
      * @param buf  Data to send
-     * @param reliable  Whether to send it over the reliable connection
+     * @param reliability  The appropriate level of reliability with which to
+     *                     send this data
      */
-    private _sendData(buf: ArrayBuffer, reliable: boolean) {
+    private _sendData(buf: ArrayBuffer, reliability: net.Reliability) {
         // Send directly
         let needRelay = false;
         for (const peer of this._peers) {
             if (!peer)
                 continue;
 
-            if (!reliable) {
-                // Try to send it unreliably, but p2p
-                if (peer.reliability >= net.Reliability.RELIABLE &&
-                    peer.unreliable) {
-                    peer.unreliable.send(buf);
+            switch (reliability) {
+                case net.Reliability.UNRELIABLE:
+                    if (peer.reliability >= net.Reliability.RELIABLE &&
+                        peer.unreliable) {
+                        peer.unreliable.send(buf);
+                        break;
+                    }
+                    // Intentional fallthrough
 
-                } else if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
-                           peer.semireliable) {
-                    peer.semireliable.send(buf);
+                case net.Reliability.SEMIRELIABLE:
+                    if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
+                        peer.semireliable) {
+                        peer.semireliable.send(buf);
+                        break;
+                    }
+                    // Intentional fallthrough
 
-                } else if (peer.reliable) { // Unreliable
-                    peer.reliable.send(buf);
+                case net.Reliability.RELIABLE:
+                    if (peer.reliable) {
+                        peer.reliable.send(buf);
+                        break;
+                    }
+                    // Intentional fallthrough
 
-                } else {
+                default:
                     needRelay = true;
-
-                }
-
-            } else if (reliable && peer.reliable)
-                peer.reliable.send(buf);
-            else
-                needRelay = true;
+            }
         }
 
         // Relay if needed
         if (needRelay) {
-            if (!reliable &&
+            if (reliability !== net.Reliability.RELIABLE &&
                 this._serverReliability === net.Reliability.RELIABLE &&
                 this._serverUnreliable) {
                 this._serverUnreliable.send(buf);
 
             } else if (this._serverReliable) {
-                if (!reliable) {
+                if (reliability !== net.Reliability.RELIABLE) {
                     /* We only have the WebSocket connection, so we don't want
                      * to cause buffering for normal data. Just send this if
                      * we're not buffering. */
@@ -775,7 +781,12 @@ export class Connection extends abstractRoom.AbstractRoom {
                 ]
             );
 
-            this._sendData(msg, key);
+            this._sendData(msg,
+                isVideo
+                    ? (key
+                       ? net.Reliability.RELIABLE
+                       : net.Reliability.UNRELIABLE)
+                    : net.Reliability.SEMIRELIABLE);
 
             idx++;
         }
