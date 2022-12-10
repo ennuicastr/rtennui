@@ -83,7 +83,7 @@ export class Peer {
         this.rtcIgnoreOffer = false;
         this.reliable = this.semireliable = this.unreliable = null;
         this.reliabilityProber = null;
-        this.reliability = net.Reliability.SEMILIABLE;
+        this.reliability = net.Reliability.SEMIRELIABLE;
         this.pingInterval = null;
         this.pongs = [];
         this._idealBufferMs = 0;
