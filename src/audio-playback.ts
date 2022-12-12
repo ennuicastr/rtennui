@@ -34,7 +34,7 @@ export interface AudioPlaybackOptions {
     /**
      * Demanded type, whether supported or not.
      */
-    demanededType?: "shared-sp" | "awp" | "sp";
+    demandedType?: "shared-sp" | "awp" | "sp";
 }
 
 /**
@@ -361,7 +361,7 @@ export async function createAudioPlaybackNoBidir(
     }
 
     // Choose one
-    let choice = opts.demanededType;
+    let choice = opts.demandedType;
     if (!choice) {
         if (playCache[opts.preferredType])
             choice = opts.preferredType;

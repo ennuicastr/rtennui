@@ -412,8 +412,8 @@ export async function createAudioPlayback(
     ac: AudioContext, opts: audioPlayback.AudioPlaybackOptions = {}
 ): Promise<audioPlayback.AudioPlayback> {
     let useShared = audioCapturePlaybackShared();
-    if (opts.demanededType)
-        useShared = (opts.demanededType === "shared-sp");
+    if (opts.demandedType)
+        useShared = (opts.demandedType === "shared-sp");
     else if (opts.preferredType)
         useShared = (opts.preferredType === "shared-sp");
 
