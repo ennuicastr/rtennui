@@ -557,7 +557,7 @@ export class Peer {
                     this._idealBufferMs * 1.5 +
 
                     // The playback delay (final buffer)
-                    10
+                    50
                 )
             });
         }

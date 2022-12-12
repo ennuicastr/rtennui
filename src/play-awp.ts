@@ -40,7 +40,11 @@ declare function registerProcessor(
     }
 );
 
+// Size of a shared buffer
 const bufSz = 96000;
+
+// Maximum amount to buffer before we start skipping data
+const maxBuf = bufSz >> 1;
 
 // Processor to play data
 class PlaybackProcessor extends AudioWorkletProcessor {
@@ -48,7 +52,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     done: boolean;
 
     idealBuf: number;
-    maxBuf: number;
 
     incoming: Float32Array[];
     incomingH: Int32Array;
@@ -66,9 +69,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
             : new Int32Array(1);
         this.readHead = 0;
 
-        // Generally we'll get 20ms at a time, so our ideal is about 30ms
-        const idealBuf = this.idealBuf = Math.round(sampleRate / 33);
-        this.maxBuf = bufSz >> 1;
+        // Try to keep about 50ms buffered
+        this.idealBuf = Math.round(sampleRate / 20);
 
         this.playing = false;
         this.done = false;
@@ -153,7 +155,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         }
 
         // Check if we have too much data
-        if (inLen >= this.maxBuf) {
+        if (inLen >= maxBuf) {
             // Move up the read head
             readHead = (readHead + inLen - this.idealBuf) % incoming[0].length;
             inLen = this.idealBuf;
