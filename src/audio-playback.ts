@@ -23,6 +23,21 @@ import * as util from "./util";
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
 /**
+ * Options for creating an audio playback.
+ */
+export interface AudioPlaybackOptions {
+    /**
+     * Preferred type, if supported.
+     */
+    preferredType?: "shared-sp" | "awp" | "sp";
+
+    /**
+     * Demanded type, whether supported or not.
+     */
+    demanededType?: "shared-sp" | "awp" | "sp";
+}
+
+/**
  * General interface for any audio playback subsystem, user implementable.
  */
 export abstract class AudioPlayback extends events.EventEmitter {
@@ -325,14 +340,40 @@ export class AudioPlaybackSP extends AudioPlayback {
     private _playing: boolean;
 }
 
+// Cache of supported options
+let playCache: Record<string, boolean> = null;
+
 /**
  * Create an appropriate audio playback from an AudioContext.
  */
 export async function createAudioPlaybackNoBidir(
-    ac: AudioContext
+    ac: AudioContext, opts: AudioPlaybackOptions = {}
 ): Promise<AudioPlayback> {
-    if (typeof AudioWorkletNode !== "undefined" &&
-        !util.isSafari()) {
+    // Cache what we support
+    if (!playCache) {
+        // Figure out what we support
+        playCache = Object.create(null);
+
+        if (typeof AudioWorkletNode !== "undefined")
+            playCache.awp = true;
+        if (ac.createScriptProcessor)
+            playCache.sp = true;
+    }
+
+    // Choose one
+    let choice = opts.demanededType;
+    if (!choice) {
+        if (playCache[opts.preferredType])
+            choice = opts.preferredType;
+    }
+    if (!choice) {
+        if (playCache.awp && !util.isSafari())
+            choice = "awp";
+        else
+            choice = "sp";
+    }
+
+    if (choice === "awp") {
         const ret = new AudioPlaybackAWP(ac);
         await ret.init();
         return ret;

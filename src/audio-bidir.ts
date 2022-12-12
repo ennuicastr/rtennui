@@ -378,9 +378,16 @@ export const audioCapturePlaybackShared = util.bugNeedSharedNodes;
  * @param ms  The MediaStream or AudioNode from which to create a capture.
  */
 export async function createAudioCapture(
-    ac: AudioContext, ms: MediaStream | AudioNode
+    ac: AudioContext, ms: MediaStream | AudioNode,
+    opts: audioCapture.AudioCaptureOptions = {}
 ): Promise<audioCapture.AudioCapture> {
-    if (audioCapturePlaybackShared()) {
+    let useShared = audioCapturePlaybackShared();
+    if (opts.demandedType)
+        useShared = (opts.demandedType === "shared-sp");
+    else if (opts.preferredType)
+        useShared = (opts.preferredType === "shared-sp");
+
+    if (useShared) {
         /* Safari's audio subsystem is not to be trusted. It's why we have
          * bidirection capture/playback. */
         const acp: AudioContext & {rteAb?: AudioBidir} = ac;
@@ -395,16 +402,22 @@ export async function createAudioCapture(
         return ab.createCapture(node);
     }
 
-    return audioCapture.createAudioCaptureNoBidir(ac, ms);
+    return audioCapture.createAudioCaptureNoBidir(ac, ms, opts);
 }
 
 /**
  * Create an appropriate audio playback from an AudioContext.
  */
 export async function createAudioPlayback(
-    ac: AudioContext
+    ac: AudioContext, opts: audioPlayback.AudioPlaybackOptions = {}
 ): Promise<audioPlayback.AudioPlayback> {
-    if (audioCapturePlaybackShared()) {
+    let useShared = audioCapturePlaybackShared();
+    if (opts.demanededType)
+        useShared = (opts.demanededType === "shared-sp");
+    else if (opts.preferredType)
+        useShared = (opts.preferredType === "shared-sp");
+
+    if (useShared) {
         // Use the bidir that was (hopefully) created with the capture
         const acp: AudioContext & {rteAb?: AudioBidir} = ac;
         let ab = acp.rteAb;
@@ -413,6 +426,6 @@ export async function createAudioPlayback(
         return ab.createPlayback();
     }
 
-    return audioPlayback.createAudioPlaybackNoBidir(ac);
+    return audioPlayback.createAudioPlaybackNoBidir(ac, opts);
 }
 

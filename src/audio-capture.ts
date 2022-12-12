@@ -30,6 +30,22 @@ export type VADState =
     "no" | "maybe" | "yes";
 
 /**
+ * Options for creating an audio capture.
+ */
+export interface AudioCaptureOptions {
+    /**
+     * Preferred type of audio capture.
+     */
+    preferredType?: "shared-sp" | "awp" | "sp";
+
+    /**
+     * *Demanded* type of audio capture. The preferred type will only be used
+     * if it's supported; the demanded type will be used even if it's not.
+     */
+    demandedType?: "shared-sp" | "awp" | "sp";
+}
+
+/**
  * General interface for any audio capture subsystem, user-implementable.
  *
  * Events:
@@ -320,21 +336,48 @@ export class AudioCaptureSP extends AudioCapture {
     private _sp: ScriptProcessorNode;
 }
 
+// Cache of supported options (at this stage)
+let capCache: Record<string, boolean> = null;
+
 /**
  * Create an appropriate audio capture from an AudioContext and an input.
  * @param ac  The AudioContext for the nodes.
  * @param ms  The MediaStream or AudioNode from which to create a capture.
  */
 export async function createAudioCaptureNoBidir(
-    ac: AudioContext, ms: MediaStream | AudioNode
+    ac: AudioContext, ms: MediaStream | AudioNode,
+    opts: AudioCaptureOptions = {}
 ): Promise<AudioCapture> {
     let node = <AudioNode> ms;
     if ((<MediaStream> ms).getAudioTracks) {
         // Looks like a media stream
         node = ac.createMediaStreamSource(<MediaStream> ms);
     }
-    if (typeof AudioWorkletNode !== "undefined" &&
-        !util.isSafari()) {
+
+    if (!capCache) {
+        // Figure out what we support
+        capCache = Object.create(null);
+
+        if (typeof AudioWorkletNode !== "undefined")
+            capCache.awp = true;
+        if (ac.createScriptProcessor)
+            capCache.sp = true;
+    }
+
+    // Choose an option
+    let choice = opts.demandedType;
+    if (!choice) {
+        if (capCache[opts.preferredType])
+            choice = opts.preferredType;
+    }
+    if (!choice) {
+        if (capCache.awp && !util.isSafari())
+            choice = "awp";
+        else
+            choice = "sp";
+    }
+
+    if (choice === "awp") {
         const ret = new AudioCaptureAWP(ac, node);
         await ret.init();
         return ret;

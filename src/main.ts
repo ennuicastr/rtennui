@@ -32,10 +32,12 @@ export async function load() {
 
 export type AudioCapture = audioCapture.AudioCapture;
 export const AudioCapture = audioCapture.AudioCapture;
+export type AudioCaptureOptions = audioCapture.AudioCaptureOptions;
 export const createAudioCapture = audioBidir.createAudioCapture;
 
 export type AudioPlayback = audioPlayback.AudioPlayback;
 export const AudioPlayback = audioPlayback.AudioPlayback;
+export type AudioPlaybackOptions = audioPlayback.AudioPlaybackOptions;
 export const createAudioPlayback = audioBidir.createAudioPlayback;
 
 export const audioCapturePlaybackShared = audioBidir.audioCapturePlaybackShared;
