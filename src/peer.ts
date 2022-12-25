@@ -1121,8 +1121,9 @@ export class Peer {
         this.playing = true;
 
         while (true) {
-            // Do we have too much data (more than double our ideal buffer)?
-            const tooMuch = this.idealBufferMs() * 2000;
+            /* Do we have too much data (more than double our ideal buffer),
+             * and more than 250ms? */
+            const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
             while (Math.max.apply(Math, this.tracks.map(x => x.duration))
                    >= tooMuch) {
                 if (!this.shift())
