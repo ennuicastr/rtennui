@@ -21,6 +21,8 @@ import * as capWorkerWaiter from "./cap-worker-waiter-js";
 import * as events from "./events";
 import * as util from "./util";
 
+import type * as libavT from "libav.js";
+declare let LibAV: libavT.LibAVWrapper;
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
 /**
@@ -36,13 +38,13 @@ export interface AudioCaptureOptions {
     /**
      * Preferred type of audio capture.
      */
-    preferredType?: "shared-sp" | "awp" | "sp";
+    preferredType?: "shared-sp" | "awp" | "mr" | "sp";
 
     /**
      * *Demanded* type of audio capture. The preferred type will only be used
      * if it's supported; the demanded type will be used even if it's not.
      */
-    demandedType?: "shared-sp" | "awp" | "sp";
+    demandedType?: "shared-sp" | "awp" | "mr" | "sp";
 }
 
 /**
@@ -292,6 +294,162 @@ export class AudioCaptureAWP extends AudioCapture {
 }
 
 /**
+ * Audio capture using a MediaRecorder.
+ */
+export class AudioCaptureMR extends AudioCapture {
+    constructor(
+        private _ms: MediaStream
+    ) {
+        super();
+        this._mr = new MediaRecorder(_ms, {
+            mimeType: "video/x-matroska; codecs=pcm"
+        });
+    }
+
+    /**
+     * You *must* initialize an AudioCaptureMR before it's usable.
+     */
+    async init() {
+        const mr = this._mr;
+        const libav = this._libav = await LibAV.LibAV();
+        const buf: Blob[] = [];
+        let bufWaiter: (val:unknown)=>unknown = null;
+
+        mr.ondataavailable = ev => {
+            console.log("INPUT");
+            buf.push(ev.data);
+            if (bufWaiter) {
+                const wt = bufWaiter;
+                bufWaiter = null;
+                wt(0);
+            }
+        };
+        mr.start(20);
+
+        async function get() {
+            if (buf.length)
+                return buf.shift();
+            await new Promise(res => {
+                bufWaiter = res;
+            });
+            return buf.shift();
+        }
+
+        (async () => {
+            await libav.mkreaderdev("in.mkv");
+
+            // First, get the first 64k so we have a header
+            let rd = 0;
+            while (rd < 65536) {
+                const part = await (await get()).arrayBuffer();
+                await libav.ff_reader_dev_send("in.mkv", new Uint8Array(part));
+                rd += part.byteLength;
+            }
+
+            // Start demuxing
+            const [fmt_ctx, streams] =
+                await libav.ff_init_demuxer_file("in.mkv");
+            const sidx = streams[0].index;
+
+            // And "decoding"
+            const [, c, pkt, frame] =
+                await libav.ff_init_decoder(
+                    streams[0].codec_id, streams[0].codecpar);
+
+            const settings = this._ms.getAudioTracks()[0].getSettings();
+            const channelCount = <number> (<any> settings).channelCount;
+            const channelLayout = (channelCount === 1) ? 4
+                : (Math.pow(2, channelCount) - 1);
+
+            // And filtering
+            const [filter_graph, buffersrc_ctx, buffersink_ctx] =
+                await libav.ff_init_filter_graph("anull", {
+                    sample_rate: settings.sampleRate,
+                    channel_layout: channelLayout
+                }, {
+                    sample_rate: settings.sampleRate,
+                    sample_fmt: libav.AV_SAMPLE_FMT_FLTP,
+                    channel_layout: channelLayout,
+                    frame_size: ~~(settings.sampleRate * 0.02)
+                });
+
+            // And start reading
+            while (true) {
+                // Demux
+                const [rcode, parts] =
+                    await libav.ff_read_multi(fmt_ctx, pkt, "in.mkv", {
+                        devLimit: 1024
+                    });
+                console.log(`CODE ${rcode} (${libav.EAGAIN})`);
+
+                const packets = <libavT.Packet[]> <any> parts[sidx];
+
+                if (!packets || !packets.length) {
+                    if (rcode === -libav.EAGAIN) {
+                        // Need more data
+                        const part = await (await get()).arrayBuffer();
+                        console.log(`Passing along ${part.byteLength}`);
+                        await libav.ff_reader_dev_send(
+                            "in.mkv", new Uint8Array(part));
+                            continue;
+                    } else if (rcode < 0) {
+                        break;
+                    } else {
+                        continue;
+                    }
+                }
+
+                console.log(`Received ${packets.length} packets`);
+
+                // Decode
+                const rawFrames =
+                    await libav.ff_decode_multi(c, pkt, frame, packets);
+                console.log(`${rawFrames.length} frames (raw)`);
+
+                // Filter
+                const frames =
+                    await libav.ff_filter_multi(buffersrc_ctx, buffersink_ctx,
+                                                frame, rawFrames, false);
+                console.log(`${frames.length} frames (cooked)`);
+
+                // Present
+                for (const frame of frames)
+                    this.emitEvent("data", frame.data);
+            }
+        })();
+    }
+
+    override getSampleRate() {
+        return this._ms.getAudioTracks()[0].getSettings().sampleRate;
+    }
+
+    /**
+     * Stop the MediaRecorder.
+     */
+    close() {
+        if (this._mr) {
+            this._mr.stop();
+            this._mr = null;
+        }
+
+        if (this._libav) {
+            this._libav.terminate();
+            this._libav = null;
+        }
+    }
+
+    /**
+     * The libav instance.
+     */
+    private _libav: libavT.LibAV;
+
+    /**
+     * The MediaRecorder.
+     */
+    private _mr: MediaRecorder;
+}
+
+/**
  * Audio capture using a ScriptProcessor.
  */
 export class AudioCaptureSP extends AudioCapture {
@@ -348,16 +506,15 @@ export async function createAudioCaptureNoBidir(
     ac: AudioContext, ms: MediaStream | AudioNode,
     opts: AudioCaptureOptions = {}
 ): Promise<AudioCapture> {
-    let node = <AudioNode> ms;
-    if ((<MediaStream> ms).getAudioTracks) {
-        // Looks like a media stream
-        node = ac.createMediaStreamSource(<MediaStream> ms);
-    }
+    const isMediaStream = !!(<MediaStream> ms).getAudioTracks;
 
     if (!capCache) {
         // Figure out what we support
         capCache = Object.create(null);
 
+        if (typeof MediaRecorder !== "undefined" &&
+            MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm"))
+            capCache.mr = true;
         if (typeof AudioWorkletNode !== "undefined")
             capCache.awp = true;
         if (ac.createScriptProcessor)
@@ -371,10 +528,26 @@ export async function createAudioCaptureNoBidir(
             choice = opts.preferredType;
     }
     if (!choice) {
-        if (capCache.awp && !util.isSafari())
+        if (isMediaStream && capCache.mr && util.bugPreferMediaRecorder())
+            choice = "mr";
+        else if (capCache.awp && !util.isSafari())
             choice = "awp";
         else
             choice = "sp";
+    }
+
+    // Consider MediaRecorder at this point, prior to making a node
+    if (choice === "mr") {
+        const ret = new AudioCaptureMR(<MediaStream> ms);
+        await ret.init();
+        return ret;
+    }
+
+    // Now turn it into a node
+    let node = <AudioNode> ms;
+    if ((<MediaStream> ms).getAudioTracks) {
+        // Looks like a media stream
+        node = ac.createMediaStreamSource(<MediaStream> ms);
     }
 
     if (choice === "awp") {

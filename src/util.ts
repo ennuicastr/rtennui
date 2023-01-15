@@ -161,6 +161,14 @@ export function bugNeedSharedNodes(): boolean {
 }
 
 /**
+ * Bug check: On Chrome, we prefer MediaRecorder for capture, because it works
+ * better than the alternatives.
+ */
+export function bugPreferMediaRecorder(): boolean {
+    return isChrome();
+}
+
+/**
  * Bug workaround check: True if we need very large buffers. This is true on
  * Chrome on Safari because its scheduler is bad, and audio nodes will lose
  * audio if their timing is this off.
