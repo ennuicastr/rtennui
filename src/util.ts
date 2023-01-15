@@ -169,6 +169,14 @@ export function bugPreferMediaRecorder(): boolean {
 }
 
 /**
+ * Connected to the above, true if we can use MediaRecorder at all.
+ */
+export function supportsMediaRecorder(): boolean {
+    return typeof MediaRecorder !== "undefined" &&
+        MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm");
+}
+
+/**
  * Bug workaround check: True if we need very large buffers. This is true on
  * Chrome on Safari because its scheduler is bad, and audio nodes will lose
  * audio if their timing is this off.

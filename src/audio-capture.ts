@@ -512,8 +512,7 @@ export async function createAudioCaptureNoBidir(
         // Figure out what we support
         capCache = Object.create(null);
 
-        if (typeof MediaRecorder !== "undefined" &&
-            MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm"))
+        if (util.supportsMediaRecorder())
             capCache.mr = true;
         if (typeof AudioWorkletNode !== "undefined")
             capCache.awp = true;
