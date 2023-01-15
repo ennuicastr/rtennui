@@ -381,11 +381,15 @@ export async function createAudioCapture(
     ac: AudioContext, ms: MediaStream | AudioNode,
     opts: audioCapture.AudioCaptureOptions = {}
 ): Promise<audioCapture.AudioCapture> {
+    const isMediaStream = !!(<MediaStream> ms).getAudioTracks;
     let useShared = audioCapturePlaybackShared();
     if (opts.demandedType)
         useShared = (opts.demandedType === "shared-sp");
     else if (opts.preferredType)
         useShared = (opts.preferredType === "shared-sp");
+    else if (isMediaStream && util.bugPreferMediaRecorder() &&
+             util.supportsMediaRecorder())
+        useShared = false;
 
     if (useShared) {
         /* Safari's audio subsystem is not to be trusted. It's why we have
