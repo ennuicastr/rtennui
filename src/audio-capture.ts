@@ -316,7 +316,6 @@ export class AudioCaptureMR extends AudioCapture {
         let bufWaiter: (val:unknown)=>unknown = null;
 
         mr.ondataavailable = ev => {
-            console.log("INPUT");
             buf.push(ev.data);
             if (bufWaiter) {
                 const wt = bufWaiter;
@@ -380,7 +379,6 @@ export class AudioCaptureMR extends AudioCapture {
                     await libav.ff_read_multi(fmt_ctx, pkt, "in.mkv", {
                         devLimit: 1024
                     });
-                console.log(`CODE ${rcode} (${libav.EAGAIN})`);
 
                 const packets = <libavT.Packet[]> <any> parts[sidx];
 
@@ -388,10 +386,9 @@ export class AudioCaptureMR extends AudioCapture {
                     if (rcode === -libav.EAGAIN) {
                         // Need more data
                         const part = await (await get()).arrayBuffer();
-                        console.log(`Passing along ${part.byteLength}`);
                         await libav.ff_reader_dev_send(
                             "in.mkv", new Uint8Array(part));
-                            continue;
+                        continue;
                     } else if (rcode < 0) {
                         break;
                     } else {
@@ -399,18 +396,14 @@ export class AudioCaptureMR extends AudioCapture {
                     }
                 }
 
-                console.log(`Received ${packets.length} packets`);
-
                 // Decode
                 const rawFrames =
                     await libav.ff_decode_multi(c, pkt, frame, packets);
-                console.log(`${rawFrames.length} frames (raw)`);
 
                 // Filter
                 const frames =
                     await libav.ff_filter_multi(buffersrc_ctx, buffersink_ctx,
                                                 frame, rawFrames, false);
-                console.log(`${frames.length} frames (cooked)`);
 
                 // Present
                 for (const frame of frames)
