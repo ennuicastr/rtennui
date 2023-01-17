@@ -298,7 +298,7 @@ export class AudioCaptureAWP extends AudioCapture {
  */
 export class AudioCaptureMR extends AudioCapture {
     constructor(
-        private _ms: MediaStream
+        private _ac: AudioContext, private _ms: MediaStream
     ) {
         super();
         this._mr = new MediaRecorder(_ms, {
@@ -366,10 +366,10 @@ export class AudioCaptureMR extends AudioCapture {
                     sample_rate: settings.sampleRate,
                     channel_layout: channelLayout
                 }, {
-                    sample_rate: settings.sampleRate,
+                    sample_rate: this._ac.sampleRate,
                     sample_fmt: libav.AV_SAMPLE_FMT_FLTP,
                     channel_layout: channelLayout,
-                    frame_size: ~~(settings.sampleRate * 0.02)
+                    frame_size: ~~(this._ac.sampleRate * 0.02)
                 });
 
             // And start reading
@@ -413,7 +413,7 @@ export class AudioCaptureMR extends AudioCapture {
     }
 
     override getSampleRate() {
-        return this._ms.getAudioTracks()[0].getSettings().sampleRate;
+        return this._ac.sampleRate;
     }
 
     /**
@@ -530,7 +530,7 @@ export async function createAudioCaptureNoBidir(
 
     // Consider MediaRecorder at this point, prior to making a node
     if (choice === "mr") {
-        const ret = new AudioCaptureMR(<MediaStream> ms);
+        const ret = new AudioCaptureMR(ac, <MediaStream> ms);
         await ret.init();
         return ret;
     }
