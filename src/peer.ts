@@ -1121,6 +1121,12 @@ export class Peer {
         this.playing = true;
 
         while (true) {
+            if (!this.tracks) {
+                // Stream was closed
+                this.playing = false;
+                break;
+            }
+
             /* Do we have too much data (more than double our ideal buffer),
              * and more than 250ms? */
             const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
@@ -1160,8 +1166,13 @@ export class Peer {
                     return;
 
                 // And play it
+                if (!this.tracks)
+                    return;
                 const track = this.tracks[chunk.trackIdx];
-                if (track.video) {
+                if (!track) {
+                    // No associated track, or track not yet configured
+
+                } else if (track.video) {
                     const frame = <wcp.VideoFrame> chunk.decoded;
                     (<videoPlayback.VideoPlayback> track.player)
                         .display(frame)
