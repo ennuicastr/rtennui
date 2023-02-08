@@ -667,11 +667,7 @@ export class Peer {
                     }
 
                     const config: wcp.AudioDecoderConfig = {
-                        // For now, force the polyfill
-                        //codec: "opus",
-                        codec: {libavjs:{
-                            codec: "libopus"
-                        }},
+                        codec: "opus",
                         sampleRate: 48000,
                         numberOfChannels: 1
                     };

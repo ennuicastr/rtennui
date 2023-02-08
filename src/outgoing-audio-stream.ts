@@ -64,9 +64,6 @@ export class OutgoingAudioStream extends events.EventEmitter {
             Math.min(Math.ceil(frameSize / 2500) * 2500, 120000);
         this._frameSize = frameSize = ~~(frameSize * 48 / 1000);
 
-        /* NOTE: We never use native WebCodecs, because we need to be able to
-         * set the frame size. */
-
         // Create our AudioEncoder
         const encoder = this._encoder =
             new LibAVWebCodecs.AudioEncoder({
@@ -80,20 +77,13 @@ export class OutgoingAudioStream extends events.EventEmitter {
 
         // Configure it
         await encoder.configure({
-            codec: {libavjs:{
-                codec: "libopus",
-                ctx: {
-                    sample_fmt: 3 /* FLT */,
-                    sample_rate: 48000,
-                    frame_size: frameSize,
-                    channel_layout: 4 /* mono */,
-                    bit_rate: 64000,
-                    bit_ratehi: 0
-                }
-            }},
+            codec: "opus",
             sampleRate: 48000,
             bitrate: 64000,
-            numberOfChannels: 1
+            numberOfChannels: 1,
+            opus: {
+                frameDuration: 20000
+            }
         });
 
         // Hook it up
