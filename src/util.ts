@@ -157,7 +157,7 @@ export function isAndroid(): boolean {
  * because its scheduler is insufficient for realtime audio.
  */
 export function bugNeedSharedNodes(): boolean {
-    return isSafari() || (isAndroid() && isChrome());
+    return isSafari() || isChrome();
 }
 
 /**
@@ -178,9 +178,9 @@ export function supportsMediaRecorder(): boolean {
 
 /**
  * Bug workaround check: True if we need very large buffers. This is true on
- * Chrome on Safari because its scheduler is bad, and audio nodes will lose
- * audio if their timing is this off.
+ * Chrome because its scheduler is bad, and audio nodes will lose audio if
+ * their timing is this off.
  */
 export function bugLargeBuffers(): boolean {
-    return isAndroid() && isChrome();
+    return isChrome();
 }
