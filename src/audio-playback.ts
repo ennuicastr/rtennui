@@ -17,6 +17,7 @@
 
 import * as capWorkerWaiter from "./cap-worker-waiter-js";
 import * as playAwp from "./play-awp-js";
+import * as playSharedAwp from "./play-shared-awp-js";
 import * as events from "./events";
 import * as util from "./util";
 
@@ -117,7 +118,7 @@ export abstract class AudioPlayback extends events.EventEmitter {
  */
 export class AudioPlaybackAWP extends AudioPlayback {
     constructor(
-        private _ac: AudioContext & {rteHavePlayWorklet?: boolean}
+        private _ac: AudioContext & {rtePlayWorkletPromise?: Promise<unknown>}
     ) {
         super();
         this._input = null;
@@ -130,10 +131,9 @@ export class AudioPlaybackAWP extends AudioPlayback {
     async init() {
         const ac = this._ac;
 
-        if (!ac.rteHavePlayWorklet) {
-            await ac.audioWorklet.addModule(playAwp.js);
-            ac.rteHavePlayWorklet = true;
-        }
+        if (!ac.rtePlayWorkletPromise)
+            ac.rtePlayWorkletPromise = ac.audioWorklet.addModule(playAwp.js);
+        await ac.rtePlayWorkletPromise;
 
         // Create the worklet...
         const worklet = this._worklet =
@@ -199,6 +199,107 @@ export class AudioPlaybackAWP extends AudioPlayback {
      * The worklet itself.
      */
     private _worklet: AudioWorkletNode;
+}
+
+/**
+ * Audio playback using a shared audio worklet processor.
+ */
+export class AudioPlaybackSharedAWP extends AudioPlayback {
+    constructor(
+        private _ac: AudioContext & {
+            rtePlaySharedWorkletPromise?: Promise<unknown>,
+            rtePlaySharedWorklet?: AudioWorkletNode
+        }
+    ) {
+        super();
+        this._input = null;
+        this._port = null;
+    }
+
+    /**
+     * You *must* initialize an AudioPlaybackSharedAWP before it's usable.
+     */
+    async init() {
+        const ac = this._ac;
+
+        // Create the worklet
+        if (!ac.rtePlaySharedWorkletPromise)
+            ac.rtePlaySharedWorkletPromise = ac.audioWorklet.addModule(playSharedAwp.js);
+        await ac.rtePlaySharedWorkletPromise;
+
+        if (!ac.rtePlaySharedWorklet) {
+            // Create the worklet...
+            const worklet = ac.rtePlaySharedWorklet =
+                new AudioWorkletNode(ac, "rtennui-play-shared", {
+                    parameterData: {
+                        sampleRate: ac.sampleRate
+                    }
+                });
+
+            // Connect it up
+            const input = this._input = ac.createConstantSource();
+            input.offset.value = 0;
+            input.connect(worklet);
+            input.start();
+        }
+
+        // Then add this input to it
+        const mc = new MessageChannel();
+        this._port = mc.port1;
+        ac.rtePlaySharedWorklet.port.postMessage({c: "in", p: mc.port2}, [mc.port2]);
+    }
+
+    /**
+     * Play this audio.
+     * @param data  Audio to play.
+     */
+    play(data: Float32Array[]) {
+        if (this._port)
+            this._port.postMessage(data, data.map(x => x.buffer));
+    }
+
+    /**
+     * We can connect a message port directly.
+     */
+    override pipeFrom(port: MessagePort) {
+        if (this._port)
+            this._port.postMessage({c: "in", p: port}, [port]);
+    }
+
+    /**
+     * Get the underlying number of channels.
+     */
+    channels() {
+        return 1;
+    }
+
+    /**
+     * Get the underlying AudioNode.
+     */
+    override sharedNode() {
+        return this._ac.rtePlaySharedWorklet;
+    }
+
+    /**
+     * Disconnect (only this port)
+     * FIXME: What if they did pipeFrom?
+     */
+    close() {
+        if (this._port) {
+            this._port.postMessage({c: "stop"});
+            this._port = null;
+        }
+    }
+
+    /**
+     * Blank-generating input node.
+     */
+    private _input: AudioNode;
+
+    /**
+     * The port to communicate with the worklet.
+     */
+    private _port: MessagePort;
 }
 
 /**
@@ -374,7 +475,7 @@ export async function createAudioPlaybackNoBidir(
     }
 
     if (choice === "awp") {
-        const ret = new AudioPlaybackAWP(ac);
+        const ret = new AudioPlaybackSharedAWP(ac);
         await ret.init();
         return ret;
 

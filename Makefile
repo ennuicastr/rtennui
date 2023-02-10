@@ -1,6 +1,7 @@
 SRC=\
 	src/*.ts src/cap-awp-js.ts src/cap-worker-js.ts \
-	src/cap-worker-waiter-js.ts src/play-awp-js.ts
+	src/cap-worker-waiter-js.ts src/play-awp-js.ts \
+	src/play-shared-awp-js.ts
 
 all: rtennui.js rtennui.min.js
 
