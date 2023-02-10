@@ -636,32 +636,36 @@ export class Connection extends abstractRoom.AbstractRoom {
             if (!peer)
                 continue;
 
-            switch (reliability) {
-                case net.Reliability.UNRELIABLE:
-                    if (peer.reliability >= net.Reliability.RELIABLE &&
-                        peer.unreliable) {
-                        peer.unreliable.send(buf);
-                        break;
-                    }
-                    // Intentional fallthrough
+            try {
+                switch (reliability) {
+                    case net.Reliability.UNRELIABLE:
+                        if (peer.reliability >= net.Reliability.RELIABLE &&
+                            peer.unreliable) {
+                            peer.unreliable.send(buf);
+                            break;
+                        }
+                        // Intentional fallthrough
 
-                case net.Reliability.SEMIRELIABLE:
-                    if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
-                        peer.semireliable) {
-                        peer.semireliable.send(buf);
-                        break;
-                    }
-                    // Intentional fallthrough
+                    case net.Reliability.SEMIRELIABLE:
+                        if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
+                            peer.semireliable) {
+                            peer.semireliable.send(buf);
+                            break;
+                        }
+                        // Intentional fallthrough
 
-                case net.Reliability.RELIABLE:
-                    if (peer.reliable) {
-                        peer.reliable.send(buf);
-                        break;
-                    }
-                    // Intentional fallthrough
+                    case net.Reliability.RELIABLE:
+                        if (peer.reliable) {
+                            peer.reliable.send(buf);
+                            break;
+                        }
+                        // Intentional fallthrough
 
-                default:
-                    needRelay = true;
+                    default:
+                        needRelay = true;
+                }
+            } catch (ex) {
+                needRelay = true;
             }
         }
 
