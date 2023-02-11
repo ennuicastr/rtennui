@@ -24,18 +24,24 @@ import * as util from "./util";
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
 /**
+ * Types of audio playback supported.
+ */
+type AudioPlaybackType =
+    "shared-awp" | "shared-sp" | "awp" | "sp";
+
+/**
  * Options for creating an audio playback.
  */
 export interface AudioPlaybackOptions {
     /**
      * Preferred type, if supported.
      */
-    preferredType?: "shared-sp" | "awp" | "sp";
+    preferredType?: AudioPlaybackType;
 
     /**
      * Demanded type, whether supported or not.
      */
-    demandedType?: "shared-sp" | "awp" | "sp";
+    demandedType?: AudioPlaybackType;
 }
 
 /**
@@ -455,8 +461,10 @@ export async function createAudioPlaybackNoBidir(
         // Figure out what we support
         playCache = Object.create(null);
 
-        if (typeof AudioWorkletNode !== "undefined")
+        if (typeof AudioWorkletNode !== "undefined") {
+            playCache["shared-awp"] = true;
             playCache.awp = true;
+        }
         if (ac.createScriptProcessor)
             playCache.sp = true;
     }
@@ -468,14 +476,19 @@ export async function createAudioPlaybackNoBidir(
             choice = opts.preferredType;
     }
     if (!choice) {
-        if (playCache.awp && !util.isSafari())
-            choice = "awp";
+        if (playCache["shared-awp"] && !util.isSafari())
+            choice = "shared-awp";
         else
             choice = "sp";
     }
 
-    if (choice === "awp") {
+    if (choice === "shared-awp") {
         const ret = new AudioPlaybackSharedAWP(ac);
+        await ret.init();
+        return ret;
+
+    } else if (choice === "awp") {
+        const ret = new AudioPlaybackAWP(ac);
         await ret.init();
         return ret;
 
