@@ -68,8 +68,7 @@ export class AudioBidirSP extends AudioBidir {
         const maxBuf = sampleRate >> 1;
 
         // Create the script processor
-        const sp = this._sp = _ac.createScriptProcessor(
-            util.bugLargeBuffers() ? 4096 : 1024, 1, 1);
+        const sp = this._sp = _ac.createScriptProcessor(1024, 1, 1);
 
         // Set up its event
         sp.onaudioprocess = ev => {
@@ -270,9 +269,7 @@ class AudioBidirSPCapture extends audioCapture.AudioCapture {
     emitData() {
         if (!this._data.length)
             return;
-        const maxBuffers =
-            (util.bugLargeBuffers() ? 4096 : 1024) /
-            captureInterval;
+        const maxBuffers = 1024 / captureInterval;
         do {
             const data = this._data[0];
             if (data.length > captureInterval) {
