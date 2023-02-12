@@ -161,10 +161,10 @@ export function bugNeedSharedNodes(): boolean {
 
 /**
  * Bug check: On Chrome, we prefer MediaRecorder for capture, because it works
- * better than the alternatives.
+ * better than the alternatives, except on Android, where it doesn't work at all.
  */
 export function bugPreferMediaRecorder(): boolean {
-    return isChrome();
+    return isChrome() && !isAndroid();
 }
 
 /**
