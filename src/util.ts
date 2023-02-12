@@ -153,11 +153,10 @@ export function isAndroid(): boolean {
 /**
  * Bug workaround check: True if we need to use shared audio nodes. This is
  * true on Safari because its audio subsystem becomes incredibly fragile if you
- * have more than one AWN or more than one SP, and true on Chrome+Android
- * because its scheduler is insufficient for realtime audio.
+ * have more than one AWN or more than one SP.
  */
 export function bugNeedSharedNodes(): boolean {
-    return isSafari() || isChrome();
+    return isSafari();
 }
 
 /**
@@ -174,13 +173,4 @@ export function bugPreferMediaRecorder(): boolean {
 export function supportsMediaRecorder(): boolean {
     return typeof MediaRecorder !== "undefined" &&
         MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm");
-}
-
-/**
- * Bug workaround check: True if we need very large buffers. This is true on
- * Chrome because its scheduler is bad, and audio nodes will lose audio if
- * their timing is this off.
- */
-export function bugLargeBuffers(): boolean {
-    return isChrome();
 }

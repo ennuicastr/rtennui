@@ -301,15 +301,42 @@ export class AudioCaptureMR extends AudioCapture {
         private _ac: AudioContext, private _ms: MediaStream
     ) {
         super();
-        this._mr = new MediaRecorder(_ms, {
-            mimeType: "video/x-matroska; codecs=pcm"
-        });
     }
 
     /**
      * You *must* initialize an AudioCaptureMR before it's usable.
      */
     async init() {
+        await this._start();
+
+        // MediaRecorder shouldn't be left recording indefinitely
+        const refresh = async () => {
+            this._refreshTimeout = null;
+
+            if (this.getVADState() !== "no") {
+                // Don't restart the recording while they're talking!
+                this._refreshTimeout = setTimeout(refresh, 5000);
+                return;
+            }
+
+            // Refresh
+            await this._refresh();
+
+            // And set a new timeout
+            this._refreshTimeout = setTimeout(refresh, 30 * 60 * 1000);
+        };
+
+        this._refreshTimeout = setTimeout(refresh, 30 * 60 * 1000);
+    }
+
+    /**
+     * Internal function to start capturing.
+     */
+    private async _start() {
+        this._mr = new MediaRecorder(this._ms, {
+            mimeType: "video/x-matroska; codecs=pcm"
+        });
+
         const mr = this._mr;
         const libav = this._libav = await LibAV.LibAV();
         const buf: Blob[] = [];
@@ -412,8 +439,17 @@ export class AudioCaptureMR extends AudioCapture {
         })();
     }
 
+    /**
+     * Internal function to "refresh" capturing: stop the current capture and
+     * start a new one.
+     */
+    private async _refresh() {
+        this.close();
+        await this._start();
+    }
+
     override getSampleRate() {
-        return this._ac.sampleRate;
+        return this._ms.getAudioTracks()[0].getSettings().sampleRate;
     }
 
     /**
@@ -429,6 +465,11 @@ export class AudioCaptureMR extends AudioCapture {
             this._libav.terminate();
             this._libav = null;
         }
+
+        if (this._refreshTimeout) {
+            clearTimeout(this._refreshTimeout);
+            this._refreshTimeout = null;
+        }
     }
 
     /**
@@ -440,6 +481,11 @@ export class AudioCaptureMR extends AudioCapture {
      * The MediaRecorder.
      */
     private _mr: MediaRecorder;
+
+    /**
+     * Timeout to refresh.
+     */
+    private _refreshTimeout: number | null;
 }
 
 /**

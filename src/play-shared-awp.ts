@@ -133,7 +133,7 @@ class SharedPlaybackProcessor extends AudioWorkletProcessor {
                     ? new Int32Array(new SharedArrayBuffer(4))
                     : new Int32Array(1);
                 this.readHead[idx] = 0;
-                this.playing[idx] = true;
+                this.playing[idx] = false;
             }
             msg.p.onmessage = ev => {
                 this.onmessage(idx, ev);
