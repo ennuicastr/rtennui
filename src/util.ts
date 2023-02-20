@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2018-2022 Yahweasel
+ * Copyright (c) 2018-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -156,7 +156,7 @@ export function isAndroid(): boolean {
  * have more than one AWN or more than one SP.
  */
 export function bugNeedSharedNodes(): boolean {
-    return isSafari();
+    return isSafari() || isChrome();
 }
 
 /**
@@ -173,4 +173,12 @@ export function bugPreferMediaRecorder(): boolean {
 export function supportsMediaRecorder(): boolean {
     return typeof MediaRecorder !== "undefined" &&
         MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm");
+}
+
+/**
+ * Bug check: On Chrome, ScriptProcessor is the only thing that works reliably,
+ * but it's also dodgy unless you've got large buffers.
+ */
+export function bugNeedLargeBuffers(): boolean {
+    return isChrome();
 }
