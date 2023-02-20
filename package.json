@@ -1,6 +1,6 @@
 {
   "name": "rtennui",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "description": "A portable replacement for WebRTC's media component",
   "main": "rtennui.js",
   "types": "src/main.ts",
