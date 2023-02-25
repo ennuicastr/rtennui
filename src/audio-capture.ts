@@ -449,7 +449,7 @@ export class AudioCaptureMR extends AudioCapture {
     }
 
     override getSampleRate() {
-        return this._ms.getAudioTracks()[0].getSettings().sampleRate;
+        return this._ac.sampleRate;
     }
 
     /**
