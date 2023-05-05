@@ -128,7 +128,6 @@ export class AudioPlaybackAB extends AudioPlayback {
         super();
         this._nextTime = -1;
         this._node = _ac.createGain();
-        console.log("Using AudioBuffers");
     }
 
     /**
