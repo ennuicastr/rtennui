@@ -27,7 +27,7 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
  * Types of audio playback supported.
  */
 type AudioPlaybackType =
-    "shared-awp" | "shared-sp" | "awp" | "sp";
+    "shared-awp" | "shared-sp" | "ab" | "awp" | "sp";
 
 /**
  * Options for creating an audio playback.
@@ -84,7 +84,8 @@ export abstract class AudioPlayback extends events.EventEmitter {
                         this.play(incoming.map(x => x.slice(lo, hi)));
                     } else {
                         this.play(incoming.map(x => x.slice(lo)));
-                        this.play(incoming.map(x => x.slice(0, hi)));
+                        if (hi > 0)
+                            this.play(incoming.map(x => x.slice(0, hi)));
                     }
                 };
                 waiter.postMessage(incomingH);
@@ -117,6 +118,60 @@ export abstract class AudioPlayback extends events.EventEmitter {
      * Stop this audio playback and remove any underlying data.
      */
     abstract close(): void;
+}
+
+/**
+ * Audio playback using AudioBufferSources.
+ */
+export class AudioPlaybackAB extends AudioPlayback {
+    constructor(private _ac: AudioContext) {
+        super();
+        this._nextTime = -1;
+        this._node = _ac.createGain();
+        console.log("Using AudioBuffers");
+    }
+
+    /**
+     * Play this audio.
+     * @param data  Audio to play.
+     */
+    play(data: Float32Array[]) {
+        const ab = this._ac.createBuffer(
+            data.length, data[0].length, this._ac.sampleRate
+        );
+        for (let c = 0; c < data.length; c++)
+            ab.copyToChannel(data[c], c);
+        const abs = this._ac.createBufferSource();
+        abs.buffer = ab;
+        abs.connect(this._node);
+
+        // Figure out the start time
+        let st = this._nextTime;
+        if (st < this._ac.currentTime)
+            st = this._ac.currentTime + 0.02;
+        abs.start(st);
+        this._nextTime = st + data[0].length / this._ac.sampleRate;
+    }
+
+    override channels(): number {
+        // This is just made up, which isn't ideal
+        return 2;
+    }
+
+    override unsharedNode(): AudioNode {
+        return this._node;
+    }
+
+    override close(): void {
+        this._node.disconnect();
+    }
+
+    // The time to play the next frame, in AudioContext units
+    private _nextTime: number;
+
+    /* An intermediary node (technically a gain node), just so that we have a
+     * single node as our output */
+    private _node: AudioNode;
 }
 
 /**
@@ -461,6 +516,7 @@ export async function createAudioPlaybackNoBidir(
         // Figure out what we support
         playCache = Object.create(null);
 
+        playCache.ab = true;
         if (typeof AudioWorkletNode !== "undefined") {
             playCache["shared-awp"] = true;
             playCache.awp = true;
@@ -476,7 +532,9 @@ export async function createAudioPlaybackNoBidir(
             choice = opts.preferredType;
     }
     if (!choice) {
-        if (playCache["shared-awp"] && !util.isSafari())
+        if (!util.bugUnreliableAudioBuffers())
+            choice = "ab";
+        else if (playCache["shared-awp"])
             choice = "shared-awp";
         else
             choice = "sp";
@@ -491,6 +549,9 @@ export async function createAudioPlaybackNoBidir(
         const ret = new AudioPlaybackAWP(ac);
         await ret.init();
         return ret;
+
+    } else if (choice === "ab") {
+        return new AudioPlaybackAB(ac);
 
     } else {
         return new AudioPlaybackSP(ac);

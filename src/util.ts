@@ -151,12 +151,13 @@ export function isAndroid(): boolean {
 }
 
 /**
- * Bug workaround check: True if we need to use shared audio nodes. This is
- * true on Safari because its audio subsystem becomes incredibly fragile if you
- * have more than one AWN or more than one SP.
+ * Bug workaround check: True if we need to use shared audio nodes. This used
+ * to be true on Safari, because it has trouble if you use audio nodes for both
+ * input and output. But, Safari can now use AudioBuffers for output, so
+ * nothing needs shared nodes.
  */
 export function bugNeedSharedNodes(): boolean {
-    return isSafari() || isChrome();
+    return false;
 }
 
 /**
@@ -176,8 +177,17 @@ export function supportsMediaRecorder(): boolean {
 }
 
 /**
- * Bug check: On Chrome, ScriptProcessor is the only thing that works reliably,
- * but it's also dodgy unless you've got large buffers.
+ * Bug check: Don't use AudioBuffer-based playback on Firefox, because it's not
+ * reliably seamless.
+ */
+export function bugUnreliableAudioBuffers(): boolean {
+    return isFirefox();
+}
+
+/**
+ * Bug check: On Chrome, ScriptProcessor is only reliable with large buffers.
+ * On most Chrome, we use MediaRecorder + AudioBuffer, so this doesn't affect
+ * us, but on Android, we still capture with a ScriptProcessor.
  */
 export function bugNeedLargeBuffers(): boolean {
     return isChrome();
