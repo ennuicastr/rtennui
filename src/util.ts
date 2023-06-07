@@ -169,11 +169,40 @@ export function bugPreferMediaRecorder(): boolean {
 }
 
 /**
- * Connected to the above, true if we can use MediaRecorder at all.
+ * Connected to the above, true if we can use MediaRecorder at all. Ideally we
+ * should just be able to check for the correct filetype support, but in June
+ * 2023, Chrome started lying about support for PCM audio, so we're forced to
+ * actually try starting a MediaRecorder instance to know whether it works
+ * reliably, so a MediaStream can be provided to give a more reliable result.
  */
-export function supportsMediaRecorder(): boolean {
-    return typeof MediaRecorder !== "undefined" &&
-        MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm");
+export function supportsMediaRecorder(
+    ms: MediaStream & {rteSupportsMediaRecorder?: boolean}
+): boolean {
+    if (typeof MediaRecorder === "undefined" ||
+        !MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm")) {
+        // No support at all
+        return false;
+    }
+    if (!ms)
+        return true;
+    if (typeof ms.rteSupportsMediaRecorder === "boolean")
+        return ms.rteSupportsMediaRecorder;
+
+    // Need to actually try it
+    try {
+        const mr = new MediaRecorder(ms, {
+            mimeType: "video/x-matroska; codecs=pcm"
+        });
+
+        mr.ondataavailable = () => {};
+        mr.start(20);
+        mr.stop();
+        ms.rteSupportsMediaRecorder = true;
+    } catch (ex) {
+        ms.rteSupportsMediaRecorder = false;
+    }
+
+    return ms.rteSupportsMediaRecorder;
 }
 
 /**

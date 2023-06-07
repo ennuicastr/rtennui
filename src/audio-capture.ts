@@ -551,7 +551,7 @@ export async function createAudioCaptureNoBidir(
         // Figure out what we support
         capCache = Object.create(null);
 
-        if (util.supportsMediaRecorder())
+        if (util.supportsMediaRecorder(null))
             capCache.mr = true;
         if (typeof AudioWorkletNode !== "undefined")
             capCache.awp = true;
@@ -566,7 +566,8 @@ export async function createAudioCaptureNoBidir(
             choice = opts.preferredType;
     }
     if (!choice) {
-        if (isMediaStream && capCache.mr && util.bugPreferMediaRecorder())
+        if (isMediaStream && capCache.mr && util.bugPreferMediaRecorder() &&
+            util.supportsMediaRecorder(<MediaStream> ms))
             choice = "mr";
         else if (capCache.awp && !util.isSafari())
             choice = "awp";
