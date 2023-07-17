@@ -387,8 +387,8 @@ export async function createAudioCapture(
         useShared = (opts.demandedType === "shared-sp");
     else if (opts.preferredType)
         useShared = (opts.preferredType === "shared-sp");
-    else if (isMediaStream && util.bugPreferMediaRecorder() &&
-             util.supportsMediaRecorder(<MediaStream> ms))
+    else if (isMediaStream && util.bugPreferMediaRecorderPCM() &&
+             util.supportsMediaRecorder(<MediaStream> ms, "video/x-matroska; codecs=pcm"))
         useShared = false;
 
     if (useShared) {

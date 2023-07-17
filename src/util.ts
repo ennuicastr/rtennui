@@ -161,10 +161,11 @@ export function bugNeedSharedNodes(): boolean {
 }
 
 /**
- * Bug check: On Chrome, we prefer MediaRecorder for capture, because it works
- * better than the alternatives, except on Android, where it doesn't work at all.
+ * Bug check: On Chrome, we prefer MediaRecorder PCM for capture, because it
+ * works better than the alternatives, except on Android, where it doesn't work
+ * at all.
  */
-export function bugPreferMediaRecorder(): boolean {
+export function bugPreferMediaRecorderPCM(): boolean {
     return isChrome() && !isAndroid();
 }
 
@@ -176,33 +177,34 @@ export function bugPreferMediaRecorder(): boolean {
  * reliably, so a MediaStream can be provided to give a more reliable result.
  */
 export function supportsMediaRecorder(
-    ms: MediaStream & {rteSupportsMediaRecorder?: boolean}
+    ms: MediaStream & {rteSupportsMediaRecorder?: Record<string, boolean>},
+    mimeType: string
 ): boolean {
     if (typeof MediaRecorder === "undefined" ||
-        !MediaRecorder.isTypeSupported("video/x-matroska; codecs=pcm")) {
-        // No support at all
+        !MediaRecorder.isTypeSupported(mimeType) &&
+        isAndroid()) {
+        // No support at all. Note that Android's support is just bad.
         return false;
     }
     if (!ms)
         return true;
-    if (typeof ms.rteSupportsMediaRecorder === "boolean")
-        return ms.rteSupportsMediaRecorder;
+    if (typeof ms.rteSupportsMediaRecorder !== "object")
+        ms.rteSupportsMediaRecorder = Object.create(null);
+    if (typeof ms.rteSupportsMediaRecorder[mimeType] === "boolean")
+        return ms.rteSupportsMediaRecorder[mimeType];
 
     // Need to actually try it
     try {
-        const mr = new MediaRecorder(ms, {
-            mimeType: "video/x-matroska; codecs=pcm"
-        });
-
+        const mr = new MediaRecorder(ms, {mimeType});
         mr.ondataavailable = () => {};
         mr.start(20);
         mr.stop();
-        ms.rteSupportsMediaRecorder = true;
+        ms.rteSupportsMediaRecorder[mimeType] = true;
     } catch (ex) {
-        ms.rteSupportsMediaRecorder = false;
+        ms.rteSupportsMediaRecorder[mimeType] = false;
     }
 
-    return ms.rteSupportsMediaRecorder;
+    return ms.rteSupportsMediaRecorder[mimeType];
 }
 
 /**

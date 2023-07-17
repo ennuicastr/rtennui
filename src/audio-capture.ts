@@ -37,14 +37,17 @@ export type VADState =
 export interface AudioCaptureOptions {
     /**
      * Preferred type of audio capture.
+     * "shared-sp" is shared ScriptProcessor. "awp" is AudioWorkletNode. "mr"
+     * is MediaRecorder with PCM audio. "mropus" is MediaRecorder with Opus.
+     * "sp" is ScriptProcessor (unshared).
      */
-    preferredType?: "shared-sp" | "awp" | "mr" | "sp";
+    preferredType?: "shared-sp" | "awp" | "mr" | "mropus" | "sp";
 
     /**
      * *Demanded* type of audio capture. The preferred type will only be used
      * if it's supported; the demanded type will be used even if it's not.
      */
-    demandedType?: "shared-sp" | "awp" | "mr" | "sp";
+    demandedType?: "shared-sp" | "awp" | "mr" | "mropus" | "sp";
 }
 
 /**
@@ -298,7 +301,8 @@ export class AudioCaptureAWP extends AudioCapture {
  */
 export class AudioCaptureMR extends AudioCapture {
     constructor(
-        private _ac: AudioContext, private _ms: MediaStream
+        private _ac: AudioContext, private _ms: MediaStream,
+        private _mimeType: string
     ) {
         super();
     }
@@ -334,7 +338,8 @@ export class AudioCaptureMR extends AudioCapture {
      */
     private async _start() {
         this._mr = new MediaRecorder(this._ms, {
-            mimeType: "video/x-matroska; codecs=pcm"
+            mimeType: this._mimeType,
+            audioBitsPerSecond: 32 * 48000 * 2
         });
 
         const mr = this._mr;
@@ -382,15 +387,15 @@ export class AudioCaptureMR extends AudioCapture {
                 await libav.ff_init_decoder(
                     streams[0].codec_id, streams[0].codecpar);
 
-            const settings = this._ms.getAudioTracks()[0].getSettings();
-            const channelCount = <number> (<any> settings).channelCount;
-            const channelLayout = (channelCount === 1) ? 4
-                : (Math.pow(2, channelCount) - 1);
+            const sampleRate = await libav.AVCodecContext_sample_rate(c);
+            const sampleFmt = await libav.AVCodecContext_sample_fmt(c);
+            const channelLayout = await libav.AVCodecContext_channel_layout(c);
 
             // And filtering
             const [filter_graph, buffersrc_ctx, buffersink_ctx] =
                 await libav.ff_init_filter_graph("anull", {
-                    sample_rate: settings.sampleRate,
+                    sample_rate: sampleRate,
+                    sample_fmt: sampleFmt,
                     channel_layout: channelLayout
                 }, {
                     sample_rate: this._ac.sampleRate,
@@ -551,8 +556,10 @@ export async function createAudioCaptureNoBidir(
         // Figure out what we support
         capCache = Object.create(null);
 
-        if (util.supportsMediaRecorder(null))
+        if (util.supportsMediaRecorder(null, "video/x-matroska; codecs=pcm"))
             capCache.mr = true;
+        if (util.supportsMediaRecorder(null, "audio/webm; codecs=opus"))
+            capCache.mropus = true;
         if (typeof AudioWorkletNode !== "undefined")
             capCache.awp = true;
         if (ac.createScriptProcessor)
@@ -566,8 +573,9 @@ export async function createAudioCaptureNoBidir(
             choice = opts.preferredType;
     }
     if (!choice) {
-        if (isMediaStream && capCache.mr && util.bugPreferMediaRecorder() &&
-            util.supportsMediaRecorder(<MediaStream> ms))
+        if (isMediaStream && capCache.mr && util.bugPreferMediaRecorderPCM() &&
+            util.supportsMediaRecorder(<MediaStream> ms,
+                                       "video/x-matroska; codecs=pcm"))
             choice = "mr";
         else if (capCache.awp && !util.isSafari())
             choice = "awp";
@@ -577,7 +585,13 @@ export async function createAudioCaptureNoBidir(
 
     // Consider MediaRecorder at this point, prior to making a node
     if (choice === "mr") {
-        const ret = new AudioCaptureMR(ac, <MediaStream> ms);
+        const ret = new AudioCaptureMR(ac, <MediaStream> ms, "video/x-matroska; codecs=pcm");
+        await ret.init();
+        return ret;
+    }
+
+    if (choice === "mropus") {
+        const ret = new AudioCaptureMR(ac, <MediaStream> ms, "audio/webm; codecs=opus");
         await ret.init();
         return ret;
     }
