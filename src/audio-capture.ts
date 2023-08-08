@@ -25,6 +25,8 @@ import type * as libavT from "libav.js";
 declare let LibAV: libavT.LibAVWrapper;
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
+declare let MediaStreamTrackProcessor: any;
+
 /**
  * VAD state.
  */
@@ -41,13 +43,13 @@ export interface AudioCaptureOptions {
      * is MediaRecorder with PCM audio. "mropus" is MediaRecorder with Opus.
      * "sp" is ScriptProcessor (unshared).
      */
-    preferredType?: "shared-sp" | "awp" | "mr" | "mropus" | "sp";
+    preferredType?: "shared-sp" | "mstp" | "awp" | "mr" | "mropus" | "sp";
 
     /**
      * *Demanded* type of audio capture. The preferred type will only be used
      * if it's supported; the demanded type will be used even if it's not.
      */
-    demandedType?: "shared-sp" | "awp" | "mr" | "mropus" | "sp";
+    demandedType?: "shared-sp" | "mstp" | "awp" | "mr" | "mropus" | "sp";
 }
 
 /**
@@ -112,6 +114,71 @@ export abstract class AudioCapture extends events.EventEmitter {
      * Current VAD state.
      */
     private _vadState: VADState;
+}
+
+/**
+ * Audio capture using a MediaStreamTrackProcessor.
+ */
+export class AudioCaptureMSTP extends AudioCapture {
+    constructor(
+        private _ac: AudioContext,
+        private _input: MediaStreamTrack
+    ) {
+        super();
+        this._dead = false;
+        this._mstp = new MediaStreamTrackProcessor({track: _input});
+        this._reader = this._mstp.readable.getReader();
+        this._promise = this._reader.read()
+            .then(x => this.onread(x))
+            .catch(() => this.close());
+    }
+
+    override getSampleRate(): number {
+        return this._input.getSettings().sampleRate;
+    }
+
+    override close(): void {
+        this._dead = true;
+        this._mstp.readable.cancel();
+    }
+
+    /**
+     * Called when data is available.
+     */
+    private onread({done, value}: ReadableStreamReadResult<any>) {
+        if (this._dead)
+            return;
+        if (done)
+            return this.close();
+
+        // The chunk should be an AudioData
+        if (value.format !== "f32-planar") {
+            // ACK! We messed up!
+            capCache.mstp = false;
+            this.close();
+            return;
+        }
+
+        // Copy out all the data
+        const ret: Float32Array[] = [];
+        for (let c = 0; c < value.numberOfChannels; c++) {
+            const cd = new Float32Array(value.numberOfFrames);
+            value.copyTo(cd, {planeIndex: c});
+            ret.push(cd);
+        }
+        value.close();
+
+        this.emitEvent("data", ret);
+
+        this._promise = this._reader.read()
+            .then(x => this.onread(x))
+            .catch(() => this.close());
+    }
+
+    private _dead: boolean;
+    private _mstp: any;
+    private _reader: ReadableStreamDefaultReader<any>;
+    private _promise: Promise<unknown>;
 }
 
 /**
@@ -556,6 +623,8 @@ export async function createAudioCaptureNoBidir(
         // Figure out what we support
         capCache = Object.create(null);
 
+        if (typeof MediaStreamTrackProcessor !== "undefined")
+            capCache.mstp = true;
         if (util.supportsMediaRecorder(null, "video/x-matroska; codecs=pcm"))
             capCache.mr = true;
         if (util.supportsMediaRecorder(null, "audio/webm; codecs=opus"))
@@ -573,9 +642,13 @@ export async function createAudioCaptureNoBidir(
             choice = opts.preferredType;
     }
     if (!choice) {
-        if (isMediaStream && capCache.mr && util.bugPreferMediaRecorderPCM() &&
-            util.supportsMediaRecorder(<MediaStream> ms,
-                                       "video/x-matroska; codecs=pcm"))
+        if (isMediaStream && capCache.mstp)
+            choice = "mstp";
+        else if (isMediaStream &&
+                 capCache.mr &&
+                 util.bugPreferMediaRecorderPCM() &&
+                 util.supportsMediaRecorder(<MediaStream> ms,
+                     "video/x-matroska; codecs=pcm"))
             choice = "mr";
         else if (capCache.awp && !util.isSafari())
             choice = "awp";
@@ -583,17 +656,20 @@ export async function createAudioCaptureNoBidir(
             choice = "sp";
     }
 
-    // Consider MediaRecorder at this point, prior to making a node
-    if (choice === "mr") {
+    // Consider choices that use MediaStream first
+    if (choice === "mstp") {
+        return new AudioCaptureMSTP(ac, (<MediaStream> ms).getAudioTracks()[0]);
+
+    } else if (choice === "mr") {
         const ret = new AudioCaptureMR(ac, <MediaStream> ms, "video/x-matroska; codecs=pcm");
         await ret.init();
         return ret;
-    }
 
-    if (choice === "mropus") {
+    } else if (choice === "mropus") {
         const ret = new AudioCaptureMR(ac, <MediaStream> ms, "audio/webm; codecs=opus");
         await ret.init();
         return ret;
+
     }
 
     // Now turn it into a node
