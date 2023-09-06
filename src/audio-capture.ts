@@ -140,7 +140,7 @@ export class AudioCaptureMSTP extends AudioCapture {
     override close(): void {
         this._dead = true;
         try {
-            this._mstp.readable.cancel();
+            this._reader.cancel();
         } catch (ex) {
             /* If the stream can't be canceled, it's only an efficiency
              * problem, not a correctness problem, so there's no use in
