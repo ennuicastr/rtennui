@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021, 2022 Yahweasel
+ * Copyright (c) 2021-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -36,7 +36,8 @@ export const protocol = {
         info: 0x22, // Other info
 
         // Actual streaming data, sent via multiple channels
-        data: 0x30
+        data: 0x30,
+        relay: 0x31
     },
 
     parts: {
@@ -128,7 +129,7 @@ export const protocol = {
         },
 
         /* data:
-         * c->s->c, c->c: Send encoded data.
+         * c->c: Send encoded data.
          */
         data: {
             length: 5, // + data
@@ -139,6 +140,21 @@ export const protocol = {
              * part: network integer
              * part count: network integer
              * data: ... */
+        },
+
+        /* relay:
+         * c->s->c: Relay encoded data. Includes a *complete* data packet.
+         */
+        relay: {
+            length: 4, // + targets, data
+            data: 4
+            /* Format of data:
+             * Target byte ct: uint8, how many bytes are used to describe all
+             *                 targets
+             * Target bytes: One byte per 8 targets, 1<<peer set if we should
+             *               relay to that target.
+             * data: A complete data packet.
+             */
         }
     }
 };

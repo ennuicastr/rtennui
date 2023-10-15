@@ -631,10 +631,19 @@ export class Connection extends abstractRoom.AbstractRoom {
      */
     private _sendData(buf: ArrayBuffer, reliability: net.Reliability) {
         // Send directly
-        let needRelay = false;
-        for (const peer of this._peers) {
+        let needRelay: number[] = [];
+        let phi = 0, plo = -1;
+        for (let peerIdx = 0; peerIdx < this._peers.length; peerIdx++) {
+            plo++;
+            if (plo >= 8) {
+                phi++;
+                plo = 0;
+            }
+
+            const peer = this._peers[peerIdx];
             if (!peer)
                 continue;
+            let peerRelay = false;
 
             try {
                 switch (reliability) {
@@ -662,19 +671,38 @@ export class Connection extends abstractRoom.AbstractRoom {
                         // Intentional fallthrough
 
                     default:
-                        needRelay = true;
+                        peerRelay = true;
                 }
             } catch (ex) {
-                needRelay = true;
+                peerRelay = true;
+            }
+
+            // If we need to relay, set it
+            if (peerRelay) {
+                while (needRelay.length <= phi)
+                    needRelay.push(0);
+                needRelay[phi] |= 1 << plo;
             }
         }
 
         // Relay if needed
-        if (needRelay) {
+        if (needRelay.length) {
+            // Build the relay message
+            const rp = prot.parts.relay;
+            const relayMsg = new DataView(net.createPacket(
+                rp.length + 1 + needRelay.length + buf.byteLength,
+                -1, prot.ids.relay, [
+                    [rp.data, 1, needRelay.length],
+                    [rp.data + 1 + needRelay.length, new Uint8Array(buf)]
+                ]
+            ));
+            for (let phi = 0; phi < needRelay.length; phi++)
+                relayMsg.setUint8(rp.data + 1 + phi, needRelay[phi]);
+
             if (reliability !== net.Reliability.RELIABLE &&
                 this._serverReliability === net.Reliability.RELIABLE &&
                 this._serverUnreliable) {
-                this._serverUnreliable.send(buf);
+                this._serverUnreliable.send(relayMsg.buffer);
 
             } else if (this._serverReliable) {
                 if (reliability !== net.Reliability.RELIABLE) {
@@ -682,9 +710,9 @@ export class Connection extends abstractRoom.AbstractRoom {
                      * to cause buffering for normal data. Just send this if
                      * we're not buffering. */
                     if (this._serverReliable.bufferedAmount < 8192)
-                        this._serverReliable.send(buf);
+                        this._serverReliable.send(relayMsg.buffer);
                 } else {
-                    this._serverReliable.send(buf);
+                    this._serverReliable.send(relayMsg.buffer);
                 }
 
             }
