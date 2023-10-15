@@ -483,7 +483,8 @@ export class AudioCaptureMR extends AudioCapture {
                 // Demux
                 const [rcode, parts] =
                     await libav.ff_read_multi(fmt_ctx, pkt, "in.mkv", {
-                        devLimit: 1024
+                        devLimit: 1024,
+                        unify: false
                     });
 
                 const packets = <libavT.Packet[]> <any> parts[sidx];
