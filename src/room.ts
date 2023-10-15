@@ -699,22 +699,32 @@ export class Connection extends abstractRoom.AbstractRoom {
             for (let phi = 0; phi < needRelay.length; phi++)
                 relayMsg.setUint8(rp.data + 1 + phi, needRelay[phi]);
 
-            if (reliability !== net.Reliability.RELIABLE &&
-                this._serverReliability === net.Reliability.RELIABLE &&
-                this._serverUnreliable) {
-                this._serverUnreliable.send(relayMsg.buffer);
-
-            } else if (this._serverReliable) {
-                if (reliability !== net.Reliability.RELIABLE) {
-                    /* We only have the WebSocket connection, so we don't want
-                     * to cause buffering for normal data. Just send this if
-                     * we're not buffering. */
-                    if (this._serverReliable.bufferedAmount < 8192)
-                        this._serverReliable.send(relayMsg.buffer);
-                } else {
+            /* We can either relay via the server's unreliable connection or
+             * via the server's reliable connection. We prefer the unreliable
+             * connection if the data is unreliable *or* the data is
+             * semireliable but the reliable connection is full. We prefer the
+             * reliable connection if the data is reliable, of course. */
+            switch (reliability) {
+                case net.Reliability.RELIABLE:
                     this._serverReliable.send(relayMsg.buffer);
-                }
+                    break;
 
+                case net.Reliability.SEMIRELIABLE:
+                    if (this._serverReliable.bufferedAmount < 8192) {
+                        this._serverReliable.send(relayMsg.buffer);
+                    } else if (this._serverUnreliable) {
+                        this._serverUnreliable.send(relayMsg.buffer);
+                    } else {
+                        this._serverReliable.send(relayMsg.buffer);
+                    }
+                    break;
+
+                default: // unreliable
+                    if (this._serverUnreliable) {
+                        this._serverUnreliable.send(relayMsg.buffer);
+                    } else if (this._serverReliable.bufferedAmount < 8192) {
+                        this._serverReliable.send(relayMsg.buffer);
+                    }
             }
         }
     }
