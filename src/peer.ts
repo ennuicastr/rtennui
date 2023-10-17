@@ -932,7 +932,8 @@ export class Peer {
         const decoder = track.decoder;
         if (!decoder || !decoder.decoder)
             return;
-        if (decoder.decoder.decodeQueueSize > 1) {
+        if (decoder.decoder.decodeQueueSize >
+            3 + (opts.force ? 12 : 0)) {
             if (opts.force) {
                 // Just mark it as done
                 packet.decoding = true;
@@ -940,6 +941,13 @@ export class Peer {
             }
             return;
         }
+
+        // Make sure we're actually ready to decode
+        if (decoder.decoder.state === "closed") {
+            decoder.init();
+            return;
+        }
+
         packet.decoding = true;
 
         // Function to unify the encoded parts
