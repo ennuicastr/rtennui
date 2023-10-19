@@ -534,10 +534,10 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Add an outgoing video track.
-     * @param track  Track to add.
+     * @param ms  Stream to add.
      */
-    async addVideoTrack(track: videoCapture.VideoCapture) {
-        const stream = new outgoingVideoStream.OutgoingVideoStream(track);
+    async addVideoTrack(ms: MediaStream) {
+        const stream = new outgoingVideoStream.OutgoingVideoStream(ms);
 
         // Choose a format
         let format: string = null;
@@ -551,7 +551,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             throw new Error("No supported video format found!");
 
         // Initialize the stream
-        await stream.init(format);
+        await stream.init();
         this._videoTracks.push(stream);
         stream.on("data", data => this._onOutgoingData(stream, data));
         stream.on("error", error => this._onOutgoingError(stream, error));
@@ -560,15 +560,15 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Remove an outgoing video track.
-     * @param track  Track to remove.
+     * @param ms  Stream to remove.
      */
-    async removeVideoTrack(track: videoCapture.VideoCapture) {
+    async removeVideoTrack(ms: MediaStream) {
         // Find the stream
         let idx: number;
         let stream: outgoingVideoStream.OutgoingVideoStream;
         for (idx = 0; idx < this._videoTracks.length; idx++) {
             let str = this._videoTracks[idx];
-            if (str.capture === track) {
+            if (str.ms === ms) {
                 stream = str;
                 break;
             }
@@ -742,7 +742,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         const tracks = []
             .concat(this._videoTracks.map(x => ({
                 codec: x.format,
-                frameDuration: ~~(1000000 / x.capture.getFramerate())
+                frameDuration: ~~(1000000 / x.getFramerate())
             })))
             .concat(this._audioTracks.map(x => ({
                 codec: "aopus",

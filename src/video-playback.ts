@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021, 2022 Yahweasel
+ * Copyright (c) 2021-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -103,14 +103,14 @@ export class VideoPlaybackCanvas extends VideoPlayback {
 
             } else if (iar > oar) {
                 // Input wider. Adjust the top position.
-                const sh = this._sh = Math.round(ow / iw * oh);
+                const sh = this._sh = Math.round(ow / iw * ih);
                 this._st = ~~((oh - sh) / 2);
                 this._sl = 0;
                 this._sw = ow;
 
             } else {
                 // Input taller. Adjust the left position.
-                const sw = this._sw = Math.round(oh / ih * ow);
+                const sw = this._sw = Math.round(oh / ih * iw);
                 this._sl = ~~((ow - sw) / 2);
                 this._st = 0;
                 this._sh = oh;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021, 2022 Yahweasel
+ * Copyright (c) 2021-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -19,16 +19,17 @@ import * as events from "./events";
 
 import type * as wcp from "libavjs-webcodecs-polyfill";
 
+declare let VideoEncoder: any, VideoFrame: any, MediaStreamTrackProcessor: any;
+
 /**
  * General interface for any video capture subsystem, user-implementable.
  *
  * Events:
- * * data(VideoFrame): A video frame is available.
+ * * data(EncodedVideoChunk): A video frame is available and encoded.
  */
 export abstract class VideoCapture extends events.EventEmitter {
     constructor() {
         super();
-        this.VideoFrame = null;
     }
 
     /**
@@ -41,11 +42,6 @@ export abstract class VideoCapture extends events.EventEmitter {
      * @param ct  Number of duplicates to make.
      */
     tee(ct: number): VideoCapture[] {
-        if (!this.VideoFrame) {
-            // This needs to be set first
-            throw new Error("VideoFrame must be set before tee");
-        }
-
         let closeCt = 0;
 
         const onclose = () => {
@@ -56,18 +52,12 @@ export abstract class VideoCapture extends events.EventEmitter {
         const ret = Array(ct).fill(null).map(() =>
             new VideoCaptureTee(this));
 
-        for (const tee of ret) {
-            tee.VideoFrame = this.VideoFrame;
+        for (const tee of ret)
             tee.onclose = onclose;
-        }
 
         this.on("data", data => {
-            for (let i = 0; i < ct - 1; i++) {
-                const tee = ret[i];
-                tee.emitEvent("data", data.clone());
-            }
-            const tee = ret[ct - 1];
-            tee.emitEvent("data", data);
+            for (const tee of ret)
+                tee.emitEvent("data", data);
         });
 
         return ret;
@@ -87,12 +77,6 @@ export abstract class VideoCapture extends events.EventEmitter {
      * Get the framerate of this capture.
      */
     abstract getFramerate(): number;
-
-    /**
-     * VideoFrame type to be used by captured frame, set by the user, but
-     * restricted by certain capture types.
-     */
-    VideoFrame?: typeof wcp.VideoFrame;
 }
 
 /**
@@ -124,111 +108,114 @@ export class VideoCaptureTee extends VideoCapture {
 }
 
 /**
- * Video capture using canvas painting.
+ * Video capture using WebCodecs and MediaStreamTrackProcessor.
  */
-export class VideoCaptureCanvas extends VideoCapture {
+export class VideoCaptureWebCodecs extends VideoCapture {
     constructor(
         /**
-         * The underlying video source.
+         * The input MediaStream.
          */
-        public source: MediaStream
+        private _ms: MediaStream,
+
+        /**
+         * The configuration to use.
+         */
+        private _config: wcp.VideoEncoderConfig
     ) {
         super();
 
-        // The actual video stream in the source
-        const srcVideo = source.getVideoTracks()[0];
-        const settings = srcVideo.getSettings();
-        const w = this._width = settings.width;
-        const h = this._height = settings.height;
-        const fr = this._framerate = settings.frameRate;
+        this._framerate = _ms.getVideoTracks()[0].getSettings().frameRate;
 
-        // Create the <video> that will play the source
-        const video = this._video = document.createElement("video");
-        video.width = w;
-        video.height = h;
-        video.style.display = "none";
-        document.body.appendChild(video);
+        this._videoEncoder = new VideoEncoder({
+            output: x => this.onOutput(x),
+            error: x => this.onError(x)
+        });
 
-        // Play the video
-        video.defaultMuted = video.muted = true;
-        video.srcObject = source;
-        video.play().catch(console.error);
+        this._mstp = new MediaStreamTrackProcessor({
+            track: _ms.getVideoTracks()[0]
+        });
 
-        // Timestamp management
-        let ts = 0;
-        const tsStep = Math.round(1000000 / fr);
-
-        // Start our capture
-        this._interval = setInterval(() => {
-            if (!this.VideoFrame)
-                return;
-
-            let frame: wcp.VideoFrame = null;
-            try {
-                frame = new this.VideoFrame(video, {
-                    timestamp: ts
-                });
-            } catch (ex) {}
-            if (!frame)
-                return;
-            ts += tsStep;
-            this.emitEvent("data", frame);
-        }, ~~(1000 / fr));
+        this._reader = this._mstp.readable.getReader();
     }
 
-    close() {
-        if (this._video) {
-            try {
-                this._video.pause();
-            } catch (ex) {}
-            try {
-                this._video.parentNode.removeChild(this._video);
-            } catch (ex) {}
-            this._video = null;
-        }
+    /**
+     * A VideoCaptureWebCodecs must be initialized.
+     */
+    async init() {
+        await this._videoEncoder.configure(this._config);
 
-        if (this._interval) {
-            clearInterval(this._interval);
-            this._interval = null;
-        }
+        // Shuttle frames in the background
+        (async () => {
+            let forceKeyframe = this._framerate * 2;
+            while (true) {
+                const {done, value} = await this._reader.read();
+                if (done)
+                    break; // FIXME
+                let kf = false;
+                forceKeyframe--;
+                if (forceKeyframe <= 0) {
+                    kf = true;
+                    forceKeyframe = this._framerate * 2;
+                }
+                this._videoEncoder.encode(value, {keyFrame: kf});
+                value.close();
+            }
+        })();
     }
 
-    getWidth() { return this._width; }
-    getHeight() { return this._height; }
-    getFramerate() { return this._framerate; }
+    override close(): void {
+        this._reader.cancel();
+        this._videoEncoder.close();
+    }
+
+    override getWidth(): number {
+        return this._ms.getVideoTracks()[0].getSettings().width;
+    }
+
+    override getHeight(): number {
+        return this._ms.getVideoTracks()[0].getSettings().height;
+    }
+
+    override getFramerate(): number {
+        return this._framerate;
+    }
 
     /**
-     * Width of the captured video.
+     * Called when there's output data.
      */
-    private _width: number;
+    onOutput(chunk: wcp.EncodedVideoChunk) {
+        this.emitEvent("data", chunk);
+    }
 
     /**
-     * Height of the captured video.
+     * Called when there's an error.
      */
-    private _height: number;
+    onError(ex: any) {
+        console.error(ex);
+    }
 
-    /**
-     * Framerate of the captured video.
-     */
     private _framerate: number;
 
-    /**
-     * The <video> element for the video being played.
-     */
-    private _video: HTMLVideoElement;
+    private _videoEncoder: wcp.VideoEncoder;
 
-    /**
-     * The interval used for capturing.
-     */
-    private _interval: number;
+    private _mstp: any;
+
+    private _reader: ReadableStreamDefaultReader<wcp.VideoFrame>;
 }
 
 /**
  * Create an appropriate video capture from a MediaStream.
  */
 export async function createVideoCapture(
-    ms: MediaStream
+    ms: MediaStream, codec: string
 ): Promise<VideoCapture> {
     // For the time being, only VideoCaptureCanvas
-    return new VideoCaptureCanvas(ms);
+    const settings = ms.getVideoTracks()[0].getSettings();
+    const ret = new VideoCaptureWebCodecs(ms, {
+        codec,
+        width: settings.width,
+        height: settings.height
+    });
+    await ret.init();
+    return ret;
 }
