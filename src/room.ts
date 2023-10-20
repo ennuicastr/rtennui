@@ -123,7 +123,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             let enc = [];
             let dec = [];
 
-            for (const codec of ["no.vp09.0.51.8", "vp8"]) {
+            for (const codec of ["vp09.00.51.08", "vp8"]) {
                 try {
                     await LibAVWebCodecs.getVideoDecoder({codec});
                     dec.push("v" + codec);
@@ -134,29 +134,6 @@ export class Connection extends abstractRoom.AbstractRoom {
                     enc.push("v" + codec);
                 } catch (ex) {}
             }
-
-            // H.263+ is special because it's not in the codec registry
-            try {
-                await LibAVWebCodecs.getVideoDecoder({
-                    codec: {libavjs:{
-                        codec: "h263p"
-                    }}
-                });
-                dec.push("vh263.2");
-                await LibAVWebCodecs.getVideoEncoder({
-                    codec: {libavjs:{
-                        codec: "h263p",
-                        ctx: {
-                            pix_fmt: 0,
-                            width: 640,
-                            height: 480
-                        }
-                    }},
-                    width: 640,
-                    height: 480
-                });
-                enc.push("vh263.2");
-            } catch (ex) {}
 
             /* We don't use native WebCodecs for audio, so our support is
              * always the same */

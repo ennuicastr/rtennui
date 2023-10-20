@@ -51,7 +51,15 @@ export abstract class VideoPlayback extends events.EventEmitter {
 export class VideoPlaybackCanvas extends VideoPlayback {
     constructor() {
         super();
+        const canvasBox = this._canvasBox = document.createElement("div");
         const canvas = this._canvas = document.createElement("canvas");
+
+        Object.assign(canvasBox.style, {
+            overflow: "hidden",
+            position: "relative"
+        });
+        canvas.style.position = "absolute";
+        canvasBox.appendChild(canvas);
 
         // Find the best context
         const ctxib = this._ctxib = canvas.getContext("bitmaprenderer");
@@ -63,6 +71,7 @@ export class VideoPlaybackCanvas extends VideoPlayback {
     }
 
     override async display(frame: wcp.VideoFrame) {
+        const canvasBox = this._canvasBox;
         const canvas = this._canvas;
 
         if (!canvas.parentNode) {
@@ -73,11 +82,11 @@ export class VideoPlaybackCanvas extends VideoPlayback {
         // Perhaps adjust the size
         let changedSize = false;
 
-        if (canvas.offsetWidth !== this._ow ||
-            canvas.offsetHeight !== this._oh) {
-            const w = this._ow = canvas.offsetWidth;
+        if (canvasBox.offsetWidth !== this._ow ||
+            canvasBox.offsetHeight !== this._oh) {
+            const w = this._ow = canvasBox.offsetWidth;
             canvas.width = ~~w;
-            const h = this._oh = canvas.offsetHeight;
+            const h = this._oh = canvasBox.offsetHeight;
             canvas.height = ~~h;
             if (this._ctx2d)
                 this._ctx2d.clearRect(0, 0, w, h);
@@ -121,8 +130,8 @@ export class VideoPlaybackCanvas extends VideoPlayback {
                 // Top/left has to be done with padding
                 const st = this._st, sl = this._sl;
                 canvas.style.padding = `${st}px 0px ${st}px 0px`;
-                canvas.width = this._ow - sl * 2;
-                canvas.height = this._oh - st * 2;
+                canvas.width = this._sw;
+                canvas.height = this._sh;
             }
         }
 
@@ -140,12 +149,17 @@ export class VideoPlaybackCanvas extends VideoPlayback {
     }
 
     override element() {
-        return this._canvas;
+        return this._canvasBox;
     }
 
     override close() {
         // Nothing to close here
     }
+
+    /**
+     * A box to contain the canvas (the element actually given to the user).
+     */
+    private _canvasBox: HTMLElement;
 
     /**
      * The canvas used to display.

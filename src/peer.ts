@@ -626,14 +626,7 @@ export class Peer {
                     track.video = true;
 
                     // Figure out the codec
-                    let codec: any;
-                    if (trackInfo.codec === "vh263.2") {
-                        codec = {libavjs:{
-                            codec: "h263p"
-                        }};
-                    } else {
-                        codec = trackInfo.codec.slice(1);
-                    }
+                    let codec = trackInfo.codec.slice(1);
 
                     // Find an environment
                     const config: wcp.VideoDecoderConfig = {
