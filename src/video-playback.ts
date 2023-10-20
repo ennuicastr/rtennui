@@ -74,7 +74,7 @@ export class VideoPlaybackCanvas extends VideoPlayback {
         const canvasBox = this._canvasBox;
         const canvas = this._canvas;
 
-        if (!canvas.parentNode) {
+        if (!canvas.parentNode || canvasBox.offsetWidth === 0 || canvasBox.offsetHeight === 0) {
             // Not visible, don't draw
             return;
         }
@@ -129,7 +129,7 @@ export class VideoPlaybackCanvas extends VideoPlayback {
             if (this._ctxib) {
                 // Top/left has to be done with padding
                 const st = this._st, sl = this._sl;
-                canvas.style.padding = `${st}px 0px ${st}px 0px`;
+                canvas.style.padding = `${st}px 0px 0px ${sl}px`;
                 canvas.width = this._sw;
                 canvas.height = this._sh;
             }
