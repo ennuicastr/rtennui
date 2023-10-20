@@ -741,7 +741,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Get our track listing
         const tracks = []
             .concat(this._videoTracks.map(x => ({
-                codec: x.format,
+                codec: x.getCodec(),
                 frameDuration: ~~(1000000 / x.getFramerate())
             })))
             .concat(this._audioTracks.map(x => ({

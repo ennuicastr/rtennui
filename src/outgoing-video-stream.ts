@@ -38,8 +38,30 @@ export class OutgoingVideoStream extends events.EventEmitter {
     }
 
     async init() {
-        this._capture = await videoCapture.createVideoCapture(this.ms, "vp8");
+        const s = this.ms.getVideoTracks()[0].getSettings();
+        const codec = this._codec;
+        const bitrate = this._bitrate = s.height * 2500;
+        this._capture = await videoCapture.createVideoCapture(this.ms, {
+            codec: codec.slice(1),
+            width: s.width,
+            height: s.height,
+            bitrate: bitrate
+        });
         this._capture.on("data", data => this.emitEvent("data", data));
+    }
+
+    /**
+     * Get the codec of this stream.
+     */
+    getCodec() {
+        return this._codec;
+    }
+
+    /**
+     * Get the current bitrate of this stream.
+     */
+    getBitrate() {
+        return this._bitrate;
     }
 
     /**
@@ -57,7 +79,9 @@ export class OutgoingVideoStream extends events.EventEmitter {
     }
 
     // FIXME: Currently always vp8
-    format = "vvp8";
+    private _codec = "vvp8";
 
-    _capture: videoCapture.VideoCapture;
+    private _bitrate: number;
+
+    private _capture: videoCapture.VideoCapture;
 }

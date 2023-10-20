@@ -22,7 +22,9 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let VideoEncoder: any, VideoFrame: any, MediaStreamTrackProcessor: any;
 
 /**
- * General interface for any video capture subsystem, user-implementable.
+ * General interface for any video capture subsystem, user-implementable. Video
+ * capture captures *encoded* video chunks, so is also responsible for
+ * encoding.
  *
  * Events:
  * * data(EncodedVideoChunk): A video frame is available and encoded.
@@ -207,15 +209,11 @@ export class VideoCaptureWebCodecs extends VideoCapture {
  * Create an appropriate video capture from a MediaStream.
  */
 export async function createVideoCapture(
-    ms: MediaStream, codec: string
+    ms: MediaStream, config: wcp.VideoEncoderConfig
 ): Promise<VideoCapture> {
     // For the time being, only VideoCaptureCanvas
     const settings = ms.getVideoTracks()[0].getSettings();
-    const ret = new VideoCaptureWebCodecs(ms, {
-        codec,
-        width: settings.width,
-        height: settings.height
-    });
+    const ret = new VideoCaptureWebCodecs(ms, config);
     await ret.init();
     return ret;
 }

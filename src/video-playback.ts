@@ -116,6 +116,14 @@ export class VideoPlaybackCanvas extends VideoPlayback {
                 this._sh = oh;
 
             }
+
+            if (this._ctxib) {
+                // Top/left has to be done with padding
+                const st = this._st, sl = this._sl;
+                canvas.style.padding = `${st}px 0px ${st}px 0px`;
+                canvas.width = this._ow - sl * 2;
+                canvas.height = this._oh - st * 2;
+            }
         }
 
         // Convert
