@@ -514,18 +514,18 @@ export class Connection extends abstractRoom.AbstractRoom {
      * @param ms  Stream to add.
      */
     async addVideoTrack(ms: MediaStream) {
-        const stream = new outgoingVideoStream.OutgoingVideoStream(ms);
-
-        // Choose a format
-        let format: string = null;
+        // Choose a codec
+        let codec: string = null;
         for (const opt of encoders) {
             if (!this._formats || this._formats.indexOf(opt) >= 0) {
-                format = opt;
+                codec = opt;
                 break;
             }
         }
-        if (!format)
-            throw new Error("No supported video format found!");
+        if (!codec)
+            throw new Error("No supported video codec found!");
+
+        const stream = new outgoingVideoStream.OutgoingVideoStream(ms, codec);
 
         // Initialize the stream
         await stream.init();

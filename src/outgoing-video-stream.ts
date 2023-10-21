@@ -32,7 +32,8 @@ declare let LibAVWebCodecs: typeof wcp;
  */
 export class OutgoingVideoStream extends events.EventEmitter {
     constructor(
-        public ms: MediaStream
+        public ms: MediaStream,
+        private _codec: string
     ) {
         super();
     }
@@ -40,11 +41,41 @@ export class OutgoingVideoStream extends events.EventEmitter {
     async init() {
         const s = this.ms.getVideoTracks()[0].getSettings();
         const codec = this._codec;
-        const bitrate = this._bitrate = s.height * 2500;
+        let width = s.width;
+        let height = s.height;
+
+        if (!width || !height) {
+            /* Size not yet known. This happens in particular on Safari with
+             * screen capture. The trick to get the actual size is to go
+             * through an HTMLVideoElement. */
+            const ve = document.createElement("video");
+            ve.srcObject = this.ms;
+            ve.defaultMuted = ve.muted = true;
+            ve.style.display = "none";
+            document.body.appendChild(ve);
+            ve.play().catch(console.error);
+            if (!ve.videoWidth) {
+                await Promise.race([
+                    new Promise(res => ve.onloadedmetadata),
+                    new Promise(res => setTimeout(res, 1000))
+                ]);
+            }
+            width = ve.videoWidth || 640;
+            height = ve.videoHeight || 360;
+            try {
+                ve.pause();
+            } catch (ex) {}
+            try {
+                ve.parentNode.removeChild(ve);
+            } catch (ex) {}
+            ve.srcObject = null;
+        }
+
+        const bitrate = this._bitrate = height * 2500;
         this._capture = await videoCapture.createVideoCapture(this.ms, {
             codec: codec.slice(1),
-            width: s.width,
-            height: s.height,
+            width: width,
+            height: height,
             bitrate: bitrate
         });
         this._capture.on("data", data => this.emitEvent("data", data));
@@ -77,9 +108,6 @@ export class OutgoingVideoStream extends events.EventEmitter {
     async close() {
         await this._capture.close();
     }
-
-    // FIXME: Currently always vp8
-    private _codec = "vvp8";
 
     private _bitrate: number;
 

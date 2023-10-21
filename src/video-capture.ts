@@ -110,7 +110,8 @@ export class VideoCaptureTee extends VideoCapture {
 }
 
 /**
- * Video capture using WebCodecs and MediaStreamTrackProcessor.
+ * Video capture using WebCodecs. This is *incomplete*, and needs a VideoFrame
+ * source to actually capture video. The VideoFrame sources are in subclasses.
  */
 export class VideoCaptureWebCodecs extends VideoCapture {
     constructor(
@@ -129,15 +130,9 @@ export class VideoCaptureWebCodecs extends VideoCapture {
         this._framerate = _ms.getVideoTracks()[0].getSettings().frameRate;
 
         this._videoEncoder = new VideoEncoder({
-            output: x => this.onOutput(x),
+            output: x => this.onChunk(x),
             error: x => this.onError(x)
         });
-
-        this._mstp = new MediaStreamTrackProcessor({
-            track: _ms.getVideoTracks()[0]
-        });
-
-        this._reader = this._mstp.readable.getReader();
     }
 
     /**
@@ -145,28 +140,24 @@ export class VideoCaptureWebCodecs extends VideoCapture {
      */
     async init() {
         await this._videoEncoder.configure(this._config);
+        this._forceKeyframe = this._framerate * 2;
+    }
 
-        // Shuttle frames in the background
-        (async () => {
-            let forceKeyframe = this._framerate * 2;
-            while (true) {
-                const {done, value} = await this._reader.read();
-                if (done)
-                    break; // FIXME
-                let kf = false;
-                forceKeyframe--;
-                if (forceKeyframe <= 0) {
-                    kf = true;
-                    forceKeyframe = this._framerate * 2;
-                }
-                this._videoEncoder.encode(value, {keyFrame: kf});
-                value.close();
-            }
-        })();
+    /**
+     * To be called by a subclass when frames are available.
+     */
+    onFrame(frame: wcp.VideoFrame) {
+        let kf = false;
+        this._forceKeyframe--;
+        if (this._forceKeyframe <= 0) {
+            kf = true;
+            this._forceKeyframe = this._framerate * 2;
+        }
+        this._videoEncoder.encode(frame, {keyFrame: kf});
+        frame.close();
     }
 
     override close(): void {
-        this._reader.cancel();
         this._videoEncoder.close();
     }
 
@@ -185,7 +176,7 @@ export class VideoCaptureWebCodecs extends VideoCapture {
     /**
      * Called when there's output data.
      */
-    onOutput(chunk: wcp.EncodedVideoChunk) {
+    onChunk(chunk: wcp.EncodedVideoChunk) {
         this.emitEvent("data", chunk);
     }
 
@@ -196,13 +187,114 @@ export class VideoCaptureWebCodecs extends VideoCapture {
         console.error(ex);
     }
 
+    // When to next force a keyframe
+    private _forceKeyframe: number;
+
+    // Video framerate
     private _framerate: number;
 
+    // Video encoder
     private _videoEncoder: wcp.VideoEncoder;
+}
+
+/**
+ * Video capture using WebCodecs and MediaStreamTrackProcessor.
+ */
+export class VideoCaptureWCMSTP extends VideoCaptureWebCodecs {
+    constructor(ms: MediaStream, config: wcp.VideoEncoderConfig) {
+        super(ms, config);
+
+        this._mstp = new MediaStreamTrackProcessor({
+            track: ms.getVideoTracks()[0]
+        });
+
+        this._reader = this._mstp.readable.getReader();
+    }
+
+    override async init() {
+        await super.init();
+
+        // Shuttle frames in the background
+        (async () => {
+            while (true) {
+                const {done, value} = await this._reader.read();
+                if (done)
+                    break; // FIXME
+                this.onFrame(value);
+            }
+        })();
+    }
+
+    override close(): void {
+        this._reader.cancel();
+        super.close();
+    }
 
     private _mstp: any;
 
     private _reader: ReadableStreamDefaultReader<wcp.VideoFrame>;
+}
+
+/**
+ * Video capture using WebCodecs and a Video element.
+ */
+export class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
+    constructor(ms: MediaStream, config: wcp.VideoEncoderConfig) {
+        super(ms, config);
+
+        // The actual video stream in the source
+        const settings = ms.getVideoTracks()[0].getSettings();
+
+        // Create the <video> that will play the source
+        const video = this._video = document.createElement("video");
+        video.width = settings.width;
+        video.height = settings.height;
+        video.style.display = "none";
+        video.defaultMuted = video.muted = true;
+        video.srcObject = ms;
+        document.body.appendChild(video);
+    }
+
+    override async init() {
+        await super.init();
+
+        // Play the video
+        const video = this._video;
+        video.play().catch(console.error);
+
+        // Timestamp management
+        let ts = 0;
+        const fr = this.getFramerate();
+        const tsStep = Math.round(1000000 / fr);
+
+        // Start our capture
+        this._interval = setInterval(() => {
+            let frame: wcp.VideoFrame = null;
+            try {
+                frame = new VideoFrame(video, {
+                    timestamp: ts
+                });
+            } catch (ex) {}
+            if (!frame)
+                return;
+            ts += tsStep;
+            this.onFrame(frame);
+        }, ~~(1000 / fr));
+    }
+
+    override close(): void {
+        clearInterval(this._interval);
+        try {
+            this._video.pause();
+        } catch (ex) {}
+        try {
+            this._video.parentNode.removeChild(this._video);
+        } catch (ex) {}
+        super.close();
+    }
+
+    private _video: HTMLVideoElement;
+    private _interval: number;
 }
 
 /**
@@ -213,7 +305,11 @@ export async function createVideoCapture(
 ): Promise<VideoCapture> {
     // For the time being, only VideoCaptureCanvas
     const settings = ms.getVideoTracks()[0].getSettings();
-    const ret = new VideoCaptureWebCodecs(ms, config);
+    let ret: VideoCaptureWebCodecs = null;
+    if (typeof MediaStreamTrackProcessor !== "undefined")
+        ret = new VideoCaptureWCMSTP(ms, config);
+    else
+        ret = new VideoCaptureWCVidEl(ms, config);
     await ret.init();
     return ret;
 }
