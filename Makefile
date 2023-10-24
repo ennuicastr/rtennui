@@ -13,8 +13,9 @@ rtennui.min.js: rtennui.js node_modules/.bin/browserify
 
 %-js.ts: %.ts node_modules/.bin/browserify
 	./node_modules/.bin/tsc --target es2017 --lib es2017,dom $< \
-		--outFile /proc/self/fd/3 3>&1 >&2 | \
-		./src/build-sourcemod.js > $@
+		--outFile $@.tmp
+	./src/build-sourcemod.js < $@.tmp > $@
+	rm -f $@.tmp
 
 node_modules/.bin/browserify:
 	npm install
