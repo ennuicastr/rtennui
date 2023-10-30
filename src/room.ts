@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021, 2022 Yahweasel
+ * Copyright (c) 2021-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -123,17 +123,18 @@ export class Connection extends abstractRoom.AbstractRoom {
             let enc = [];
             let dec = [];
 
+            for (const codec of await videoCapture.codecSupportList())
+                enc.push("v" + codec);
+
             for (const codec of ["vp09.00.51.08", "vp8"]) {
                 try {
                     await LibAVWebCodecs.getVideoDecoder({codec});
                     dec.push("v" + codec);
-                    await LibAVWebCodecs.getVideoEncoder({
-                        codec,
-                        width: 640, height: 480
-                    });
-                    enc.push("v" + codec);
                 } catch (ex) {}
             }
+            // FIXME
+            if (dec.length === 0)
+                dec.push("vvp8");
 
             /* We don't use native WebCodecs for audio, so our support is
              * always the same */
@@ -517,6 +518,8 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Choose a codec
         let codec: string = null;
         for (const opt of encoders) {
+            if (opt[0] !== "v")
+                continue;
             if (!this._formats || this._formats.indexOf(opt) >= 0) {
                 codec = opt;
                 break;
@@ -527,7 +530,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         const stream = new outgoingVideoStream.OutgoingVideoStream(ms, codec);
 
-        // Initialize the stream
+        // Set up the stream
         await stream.init();
         this._videoTracks.push(stream);
         stream.on("data", data => this._onOutgoingData(stream, data));

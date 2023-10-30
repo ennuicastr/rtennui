@@ -1077,12 +1077,10 @@ export class Peer {
                 }
             }
 
-            /*
             if (!complete && next.key) {
                 // Can't skip keyframes
                 return null;
             }
-            */
 
             // We're either displaying it or skipping it, so shift it
             this.data.shift();
@@ -1130,7 +1128,10 @@ export class Peer {
             const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
             while (Math.max.apply(Math, this.tracks.map(x => x.duration))
                    >= tooMuch) {
-                if (!this.shift())
+                const chunk = this.shift();
+                if (chunk)
+                    chunk.close();
+                else
                     break;
             }
 
@@ -1160,21 +1161,24 @@ export class Peer {
             (async () => {
                 // Make sure it's decoded
                 await chunk.decodingPromise;
-                if (!chunk.decoded)
+                if (!chunk.decoded) {
+                    chunk.close();
                     return;
+                }
 
                 // And play it
-                if (!this.tracks)
+                if (!this.tracks) {
+                    chunk.close();
                     return;
+                }
                 const track = this.tracks[chunk.trackIdx];
                 if (!track) {
                     // No associated track, or track not yet configured
 
                 } else if (track.video) {
-                    const frame = <wcp.VideoFrame> chunk.decoded;
                     (<videoPlayback.VideoPlayback> track.player)
-                        .display(frame)
-                        .then(() => frame.close());
+                        .display(<wcp.VideoFrame> chunk.decoded)
+                        .then(() => chunk.close());
 
                 } else {
                     (<audioPlayback.AudioPlayback> track.player)
@@ -1482,6 +1486,19 @@ class IncomingData {
     }
 
     /**
+     * Close any resources associated with this decoder.
+     */
+    close() {
+        if (!this.decoding && !this.decoded)
+            return;
+        this.decodingPromise.then(async () => {
+            const frame = <wcp.VideoFrame> this.decoded;
+            if (frame && frame.close)
+                frame.close();
+        });
+    }
+
+    /**
      * The input encoded data, possibly split into parts.
      * @private
      */
@@ -1561,9 +1578,6 @@ class Decoder {
         /* Reinitialize (FIXME: Some type of timing so we don't do this over
          * and over?) */
         this.init();
-
-        // If there's a handler for uncaught errors, it will receive this
-        throw error;
     }
 
     /**

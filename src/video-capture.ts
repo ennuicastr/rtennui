@@ -17,9 +17,16 @@
 
 import * as events from "./events";
 
+import type * as libavT from "libav.js";
+declare let LibAV: libavT.LibAVWrapper;
 import type * as wcp from "libavjs-webcodecs-polyfill";
+declare let LibAVWebCodecs: typeof wcp;
 
 declare let VideoEncoder: any, VideoFrame: any, MediaStreamTrackProcessor: any;
+
+// Our codec->system support matrix
+const codecSupport: Record<string, string> = Object.create(null);
+let codecSupportArr: string[] | null = null;
 
 /**
  * General interface for any video capture subsystem, user-implementable. Video
@@ -33,6 +40,15 @@ export abstract class VideoCapture extends events.EventEmitter {
     constructor() {
         super();
     }
+
+    /**
+     * Degrade or enhance this capture. Returns whether the
+     * degredation/enhancement was actually possible.
+     * @param enhancement  Degree of degrading or enhancement. Not especially
+     *                     precise, but choose a value less than 1 to degrade,
+     *                     greater than 1 to enhance.
+     */
+    abstract grade(enhancement: number): Promise<boolean>;
 
     /**
      * Stop this video capture and remove any underlying data.
@@ -51,8 +67,8 @@ export abstract class VideoCapture extends events.EventEmitter {
                 this.close();
         };
 
-        const ret = Array(ct).fill(null).map(() =>
-            new VideoCaptureTee(this));
+        const started = {started: false};
+        const ret = Array(ct).fill(null).map(() => new VideoCaptureTee(this));
 
         for (const tee of ret)
             tee.onclose = onclose;
@@ -89,6 +105,10 @@ export class VideoCaptureTee extends VideoCapture {
         super();
     }
 
+    override grade(enhancement: number): Promise<boolean> {
+        return this._base.grade(enhancement);
+    }
+
     override close() {
         if (this.onclose)
             this.onclose();
@@ -113,7 +133,7 @@ export class VideoCaptureTee extends VideoCapture {
  * Video capture using WebCodecs. This is *incomplete*, and needs a VideoFrame
  * source to actually capture video. The VideoFrame sources are in subclasses.
  */
-export class VideoCaptureWebCodecs extends VideoCapture {
+class VideoCaptureWebCodecs extends VideoCapture {
     constructor(
         /**
          * The input MediaStream.
@@ -128,25 +148,54 @@ export class VideoCaptureWebCodecs extends VideoCapture {
         super();
 
         this._framerate = _ms.getVideoTracks()[0].getSettings().frameRate;
+    }
 
+    async initEncoder() {
         this._videoEncoder = new VideoEncoder({
             output: x => this.onChunk(x),
             error: x => this.onError(x)
         });
-    }
-
-    /**
-     * A VideoCaptureWebCodecs must be initialized.
-     */
-    async init() {
         await this._videoEncoder.configure(this._config);
         this._forceKeyframe = this._framerate * 2;
+    }
+
+    override async grade(enhancement: number): Promise<boolean> {
+        const newConfig = Object.assign({}, this._config);
+        const width = this.getWidth();
+        const height = this.getHeight();
+
+        // Adjust the height
+        newConfig.height *= enhancement;
+        if (newConfig.height < height && newConfig.height < 360)
+            newConfig.height = 360;
+        else if (newConfig.height > height)
+            newConfig.height = height;
+        newConfig.height = Math.round(newConfig.height / 8) * 8;
+        if (newConfig.height === this._config.height)
+            return false;
+
+        // Adjust the width and bitrate to match
+        newConfig.width = Math.round((newConfig.height / height) * width / 8) * 8;
+        newConfig.bitrate = newConfig.height * 2500;
+
+        // End the old video encoder
+        try {
+            this._videoEncoder.close();
+        } catch (ex) {}
+
+        // And start the new one
+        this._config = newConfig;
+        await this.initEncoder();
+        return true;
     }
 
     /**
      * To be called by a subclass when frames are available.
      */
     onFrame(frame: wcp.VideoFrame) {
+        if (!this._videoEncoder || this._videoEncoder.state !== "configured")
+            return;
+
         let kf = false;
         this._forceKeyframe--;
         if (this._forceKeyframe <= 0) {
@@ -200,7 +249,7 @@ export class VideoCaptureWebCodecs extends VideoCapture {
 /**
  * Video capture using WebCodecs and MediaStreamTrackProcessor.
  */
-export class VideoCaptureWCMSTP extends VideoCaptureWebCodecs {
+class VideoCaptureWCMSTP extends VideoCaptureWebCodecs {
     constructor(ms: MediaStream, config: wcp.VideoEncoderConfig) {
         super(ms, config);
 
@@ -211,8 +260,8 @@ export class VideoCaptureWCMSTP extends VideoCaptureWebCodecs {
         this._reader = this._mstp.readable.getReader();
     }
 
-    override async init() {
-        await super.init();
+    async init() {
+        await this.initEncoder();
 
         // Shuttle frames in the background
         (async () => {
@@ -238,7 +287,7 @@ export class VideoCaptureWCMSTP extends VideoCaptureWebCodecs {
 /**
  * Video capture using WebCodecs and a Video element.
  */
-export class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
+class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
     constructor(ms: MediaStream, config: wcp.VideoEncoderConfig) {
         super(ms, config);
 
@@ -255,8 +304,8 @@ export class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
         document.body.appendChild(video);
     }
 
-    override async init() {
-        await super.init();
+    async init() {
+        await this.initEncoder();
 
         // Play the video
         const video = this._video;
@@ -298,18 +347,303 @@ export class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
 }
 
 /**
+ * Video capture using MediaRecorder.
+ */
+class VideoCaptureMediaRecorder extends VideoCapture {
+    constructor(
+        /**
+         * The media stream to capture.
+         */
+        private _ms: MediaStream,
+
+        /**
+         * The WebCodecs configuration to approximate.
+         */
+        private _config: wcp.VideoEncoderConfig
+    ) {
+        super();
+
+        // Convert the codec string
+        this._codec = "" + _config.codec;
+        if (/^vp09/.test("" + _config.codec))
+            this._codec = "vp9";
+
+        // And bitrate
+        this._bitrate = _config.bitrate || _config.height * 2500;
+
+        // Framerate isn't yet known
+        this._framerate = 0;
+    }
+
+    async init(): Promise<void> {
+        // Create the MediaRecorder
+        this._mr = new MediaRecorder(this._ms, {
+            mimeType: `video/webm; codecs=${this._codec}`,
+            videoBitsPerSecond: this._bitrate
+        });
+
+        // Create the libav.js instance
+        const libav = this._libav = await LibAV.LibAV();
+
+        // Prepare the data transit
+        await libav.mkreaderdev("in");
+
+        let tmpData: Uint8Array[] = [];
+        let dataPromise = <Promise<unknown>> Promise.all([]);
+        this._mr.ondataavailable = ev => {
+            dataPromise = dataPromise.then(async () => {
+                const ab = await ev.data.arrayBuffer();
+                tmpData.push(new Uint8Array(ab));
+                libav.ff_reader_dev_send("in", new Uint8Array(ab));
+            }).catch(console.error);
+        };
+        this._mr.onstop = ev => {
+            dataPromise = dataPromise.then(() => {
+                const blob = new File(tmpData, "tmp.webm", {type: "application/octet-stream"});
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                document.body.appendChild(a);
+
+                libav.ff_reader_dev_send("in", null);
+            });
+        };
+
+        this._mr.start(1);
+
+        // Prepare the reader
+        const [fmt_ctx, [stream]] =
+            await libav.ff_init_demuxer_file("in");
+        const pkt = await libav.av_packet_alloc();
+
+        // Read three frames to get the framerate
+        {
+            // First frame: just discarded as possibly non-representative
+            await libav.ff_read_multi(fmt_ctx, pkt, null, {
+                limit: 1,
+                unify: false
+            });
+
+            // Second frame: time ref one
+            const [res1, packets1] =
+                await libav.ff_read_multi(fmt_ctx, pkt, null, {
+                    limit: 1,
+                    unify: false
+                });
+
+            // Third frame: time ref two
+            const [res2, packets2] =
+                await libav.ff_read_multi(fmt_ctx, pkt, null, {
+                    limit: 1,
+                    unify: false
+                });
+
+            // Default is from the data
+            this._framerate =
+                this._ms.getVideoTracks()[0].getSettings().frameRate;
+            if (packets1 && packets1[stream.index] &&
+                packets2 && packets2[stream.index]) {
+                // Calculate our framerate
+                const packets =
+                    packets1[stream.index].concat(packets2[stream.index]);
+                const pts1 =
+                    packets[0].pts * stream.time_base_num / stream.time_base_den;
+                const pts2 =
+                    packets[1].pts * stream.time_base_num / stream.time_base_den;
+                const fr = 1 / (pts2 - pts1);
+                if (fr && Number.isFinite(fr))
+                    this._framerate = fr;
+            }
+            console.log(`Framerate is ${this._framerate}`);
+        }
+
+        // And read data in the background
+        (async () => {
+            let beforeFirstKeyframe = true;
+            while (true) {
+                const [res, packets] =
+                    await libav.ff_read_multi(fmt_ctx, pkt, null, {
+                        limit: 1,
+                        unify: false
+                    });
+
+                if (res !== 0 && res !== -libav.EAGAIN) {
+                    // Read error! FIXME
+                    break;
+                }
+
+                if (packets[stream.index]) {
+                    // Transit these packets
+                    for (const packet of packets[stream.index]) {
+                        const key = !!(packet.flags & 1);
+                        if (beforeFirstKeyframe) {
+                            if (key)
+                                beforeFirstKeyframe = false;
+                            else
+                                continue;
+                        }
+
+                        /* Because MediaRecorder is free to use altref frames
+                         * and other mandatory frames, we have to mark
+                         * everything as a keyframe. If the decoder comes in
+                         * late, it may fail to decode, so the decoder has to be
+                         * robust against mismarked frames. Ideally, we would
+                         * just have two bits for keyframe-ness, but really,
+                         * ideally, we wouldn't be using MediaRecorder :) */
+                        const evc = new LibAVWebCodecs.EncodedVideoChunk({
+                            data: packet.data,
+                            type: "key",
+                            timestamp: 0
+                        });
+                        this.emitEvent("data", evc);
+                    }
+                }
+
+                if (res === 0 || res === -libav.AVERROR_EOF)
+                    break;
+            }
+
+            libav.terminate();
+        })();
+    }
+
+    override async grade(enhancement: number): Promise<boolean> {
+        // All we can change with MediaRecorder is the bitrate
+        const newConfig = Object.assign({}, this._config);
+        const height = newConfig.height;
+
+        newConfig.bitrate *= enhancement;
+        if (newConfig.bitrate < 360 * 2500) // lowest allowed bitrate
+            newConfig.bitrate = 360 * 2500;
+        else if (newConfig.bitrate > height * 2500)
+            newConfig.bitrate = height * 2500;
+        if (newConfig.bitrate === this._config.bitrate)
+            return false;
+
+        // OK, we changed the bitrate. Stop the old media recorder...
+        try {
+            this._mr.stop();
+        } catch (ex) {}
+
+        // And make a new one
+        await this.init();
+
+        return true;
+    }
+
+    override close(): void {
+        this._mr.stop();
+        // libav will terminate itself
+    }
+
+    override getWidth(): number {
+        return this._ms.getVideoTracks()[0].getSettings().width;
+    }
+
+    override getHeight(): number {
+        return this._ms.getVideoTracks()[0].getSettings().height;
+    }
+
+    override getFramerate(): number {
+        return this._framerate;
+    }
+
+    // Current codec as a MediaRecorder name
+    private _codec: string;
+
+    // Current bitrate
+    private _bitrate: number;
+
+    // The MediaRecorder instance
+    private _mr: MediaRecorder;
+
+    // The LibAV instance
+    private _libav: libavT.LibAV;
+
+    // The framerate, detected from the data
+    private _framerate: number;
+}
+
+/**
+ * Get our codec support list (and also create it if needed).
+ */
+export async function codecSupportList(): Promise<string[]> {
+    if (codecSupportArr)
+        return codecSupportArr;
+
+    const cs = codecSupport;
+    const csl = codecSupportArr = [];
+
+    if (typeof VideoEncoder !== "undefined") {
+        let cap = "wcvidel";
+        if (typeof MediaStreamTrackProcessor !== "undefined")
+            cap = "wcmstp";
+
+        // Check for what's supported by VideoEncoder
+        for (const codec of ["vp09.00.51.08", "vp8"]) {
+            if (cs[codec])
+                continue;
+            try {
+                const support = await VideoEncoder.isConfigSupported({
+                    codec, width: 640, height: 480
+                });
+                if (support.supported) {
+                    cs[codec] = cap;
+                    csl.push(codec);
+                }
+            } catch (ex) {}
+        }
+    }
+
+    if (typeof MediaRecorder !== "undefined") {
+        // Check what's supported by MediaRecorder
+        for (const codec of [
+            ["vp9", "vp09.00.51.08"], ["vp8", "vp8"]
+        ]) {
+            const mrCodec = codec[0];
+            const wcCodec = codec[1];
+            if (cs[wcCodec])
+                continue;
+            try {
+                if (MediaRecorder.isTypeSupported(`video/webm; codecs=${mrCodec}`)) {
+                    cs[wcCodec] = "mr";
+                    csl.push(wcCodec);
+                }
+            } catch (ex) {}
+        }
+    }
+
+    return csl;
+}
+
+/**
  * Create an appropriate video capture from a MediaStream.
  */
 export async function createVideoCapture(
     ms: MediaStream, config: wcp.VideoEncoderConfig
 ): Promise<VideoCapture> {
-    // For the time being, only VideoCaptureCanvas
-    const settings = ms.getVideoTracks()[0].getSettings();
-    let ret: VideoCaptureWebCodecs = null;
-    if (typeof MediaStreamTrackProcessor !== "undefined")
-        ret = new VideoCaptureWCMSTP(ms, config);
-    else
-        ret = new VideoCaptureWCVidEl(ms, config);
-    await ret.init();
-    return ret;
+    switch (codecSupport["" + config.codec]) {
+        case "wcmstp":
+        {
+            const ret = new VideoCaptureWCMSTP(ms, config);
+            await ret.init();
+            return ret;
+        }
+
+        case "wcvidel":
+        {
+            const ret = new VideoCaptureWCVidEl(ms, config);
+            await ret.init();
+            return ret;
+        }
+
+        case "mr":
+        {
+            const ret = new VideoCaptureMediaRecorder(ms, config);
+            await ret.init();
+            return ret;
+        }
+
+        default:
+            throw new Error(`Unsupported codec ${config.codec}!`);
+    }
 }

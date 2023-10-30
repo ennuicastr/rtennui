@@ -38,6 +38,9 @@ export class OutgoingVideoStream extends events.EventEmitter {
         super();
     }
 
+    /**
+     * An OutgoingVideoStream must be initialized to start producing frames.
+     */
     async init() {
         const s = this.ms.getVideoTracks()[0].getSettings();
         const codec = this._codec;
@@ -76,7 +79,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
             codec: codec.slice(1),
             width: width,
             height: height,
-            bitrate: bitrate
+            bitrate: bitrate,
+            latencyMode: "realtime"
         });
         this._capture.on("data", data => this.emitEvent("data", data));
     }
