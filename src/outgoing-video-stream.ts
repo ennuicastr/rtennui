@@ -74,6 +74,14 @@ export class OutgoingVideoStream extends events.EventEmitter {
             ve.srcObject = null;
         }
 
+        if (!width || !height) {
+            width = 640;
+            height = 360;
+        }
+
+        this._width = width;
+        this._height = height;
+
         const bitrate = this._bitrate = height * 2500;
         this._capture = await videoCapture.createVideoCapture(this.ms, {
             codec: codec.slice(1),
@@ -96,7 +104,7 @@ export class OutgoingVideoStream extends events.EventEmitter {
      * Get the current bitrate of this stream.
      */
     getBitrate() {
-        return this._bitrate;
+        return this._bitrate; // FIXME
     }
 
     /**
@@ -107,6 +115,20 @@ export class OutgoingVideoStream extends events.EventEmitter {
     }
 
     /**
+     * Get the nominal width of this stream.
+     */
+    getWidth() {
+        return this._width;
+    }
+
+    /**
+     * Get the nominal height of this stream.
+     */
+    getHeight() {
+        return this._height;
+    }
+
+    /**
      * Close this outgoing stream.
      */
     async close() {
@@ -114,6 +136,9 @@ export class OutgoingVideoStream extends events.EventEmitter {
     }
 
     private _bitrate: number;
+
+    private _width: number;
+    private _height: number;
 
     private _capture: videoCapture.VideoCapture;
 }

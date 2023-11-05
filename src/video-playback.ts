@@ -17,6 +17,8 @@
 
 import * as events from "./events";
 
+import type * as libavT from "libav.js";
+declare let LibAV: libavT.LibAVWrapper;
 import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
@@ -29,10 +31,20 @@ export abstract class VideoPlayback extends events.EventEmitter {
     }
 
     /**
-     * Display this frame.
-     * @param frame  Frame to display.
+     * Does this video playback provide its own decoding?
      */
-    abstract display(frame: wcp.VideoFrame): Promise<void>;
+    selfDecoding(): boolean { return false; }
+
+    /**
+     * Display this frame. For internal use only.
+     * @param frame  Frame to display. If this VideoPlayback is self-decoding
+     *               (see selfDecoding), this *must* be an EncodedVideoChunk.
+     *               If this VideoPlayback is not self-decoding, this *must* be
+     *               a VideoFrame.
+     */
+    abstract display(
+        frame: wcp.VideoFrame | wcp.EncodedVideoChunk
+    ): Promise<void>;
 
     /**
      * Get the underlying HTML element.
@@ -70,7 +82,8 @@ export class VideoPlaybackCanvas extends VideoPlayback {
             this._ow = this._oh = 0;
     }
 
-    override async display(frame: wcp.VideoFrame) {
+    override async display(frameX: wcp.VideoFrame | wcp.EncodedVideoChunk) {
+        const frame = <wcp.VideoFrame> frameX;
         const canvasBox = this._canvasBox;
         const canvas = this._canvas;
 
@@ -187,8 +200,175 @@ export class VideoPlaybackCanvas extends VideoPlayback {
 }
 
 /**
- * Create a supported VideoPlayback.
+ * Playback by a video element with a MediaSource from the raw input data.
  */
-export async function createVideoPlayback(): Promise<VideoPlayback> {
-    return new VideoPlaybackCanvas();
+class VideoPlaybackMediaSource extends VideoPlayback {
+    constructor(
+        private _codec: string,
+        private _width: number,
+        private _height: number
+    ) {
+        super();
+
+        // Create the MediaSource and its source buffer
+        this._ms = new MediaSource();
+
+        // Create our video element to play it
+        this._el = document.createElement("video");
+    }
+
+    /**
+     * A VideoPlaybackMediaSource must be initialized.
+     */
+    async init() {
+        this._closed = false;
+
+        // Start playing
+        this._el.src = URL.createObjectURL(this._ms);
+
+        // Create a SourceBuffer (when possible)
+        if (this._ms.readyState !== "open") {
+            await new Promise(
+                res => this._ms.addEventListener("sourceopen", res));
+        }
+        this._sb = this._ms.addSourceBuffer(`video/webm; codecs=${this._codec}`);
+        //this._sb.mode = "sequence";
+
+        this._el.play();
+        /*
+        this._el.addEventListener("stalled", async ev => {
+            if (!this._closed)
+                return;
+            this._el.pause();
+            await new Promise(res => setTimeout(res, 1000));
+            this._el.play();
+        });
+        */
+
+        // Create our libav instance
+        const libav = this._libav = await LibAV.LibAV();
+        libav.onwrite = (fn, pos, buf) => this.onLibAVWrite(buf);
+        await libav.mkstreamwriterdev("output");
+
+        // Create a codecpar with just enough information to make our header
+        const codecpar = await libav.avcodec_parameters_alloc();
+        const desc = await libav.avcodec_descriptor_get_by_name(this._codec);
+        await libav.AVCodecParameters_codec_type_s(
+            codecpar, libav.AVMEDIA_TYPE_VIDEO);
+        await libav.AVCodecParameters_codec_id_s(
+            codecpar, await libav.AVCodecDescriptor_id(desc));
+        await libav.AVCodecParameters_format_s(
+            codecpar, libav.AV_PIX_FMT_YUV420P);
+        await libav.AVCodecParameters_width_s(
+            codecpar, this._width);
+        await libav.AVCodecParameters_height_s(
+            codecpar, this._height);
+
+        // Then make the muxer
+        let streams: any;
+        [this._oc, , this._pb, streams] = await libav.ff_init_muxer({
+            format_name: "webm",
+            filename: "output",
+            open: true,
+            codecpars: true
+        }, [[codecpar, 1, 1000]]);
+        /*
+        await libav.AVFormatContext_flags_s(
+            this._oc, await libav.AVFormatContext_flags(this._oc) |
+            libav.AVFMT_FLAG_NOBUFFER | libav.AVFMT_FLAG_FLUSH_PACKETS);
+        */
+        await libav.avformat_write_header(this._oc, 0);
+        this._pts = 1;
+
+        // And a packet for transit
+        this._pkt = await libav.av_packet_alloc();
+    }
+
+    override selfDecoding(): boolean { return true; }
+
+    override async display(frameX: wcp.VideoFrame | wcp.EncodedVideoChunk) {
+        if (this._closed)
+            return;
+
+        const frame = <wcp.EncodedVideoChunk> frameX;
+
+        // Get out the data
+        const data = new Uint8Array(frame.byteLength);
+        frame.copyTo(data.buffer);
+
+        // Make a libav.js packet
+        const pts = this._pts++;
+        const packet: libavT.Packet = {
+            data,
+            pts,
+            ptshi: 0,
+            dts: pts,
+            dtshi: 0,
+            flags: (frame.type === "key") ? 1 : 0,
+            stream_index: 0
+        };
+
+        // And write it
+        const libav = this._libav;
+        await libav.ff_write_multi(this._oc, this._pkt, [packet], false);
+        await libav.avio_flush(this._pb);
+    }
+
+    override element(): HTMLElement {
+        return this._el;
+    }
+
+    override close(): void {
+        if (this._closed)
+            return;
+        this._closed = true;
+        this._libav.terminate();
+        this._ms.endOfStream();
+    }
+
+    // Called when libav outputs muxed data
+    private onLibAVWrite(buf: Uint8Array | Int8Array) {
+        this._sb.appendBuffer(buf.buffer);
+    }
+
+    private _closed: boolean;
+
+    private _ms: MediaSource;
+
+    private _sb: SourceBuffer;
+
+    private _el: HTMLVideoElement;
+
+    private _libav: libavT.LibAV;
+
+    private _oc: number;
+    private _pb: number;
+    private _pts: number;
+    private _pkt: number;
+}
+
+/**
+ * Create a supported VideoPlayback.
+ * @param codec  Codec to display. Only used by self-decoding VideoPlaybacks,
+ *               but the caller won't know whether a self-decoding
+ *               VideoPlayback will be used, so this should always be set.
+ * @param width  Width of the input video. Again only used by self-decoding
+ *               VideoPlaybacks.
+ * @param height  Height of the input video. Again only used by self-decoding
+ *                VideoPlaybacks.
+ */
+export async function createVideoPlayback(
+    codec: string, width: number, height: number
+): Promise<VideoPlayback> {
+    if (
+        codec === "vp8" &&
+        typeof MediaSource !== "undefined" &&
+        MediaSource.isTypeSupported(`video/webm; codecs=${codec}`)
+    ) {
+        const ret = new VideoPlaybackMediaSource(codec, width, height);
+        await ret.init();
+        return ret;
+    } else {
+        return new VideoPlaybackCanvas();
+    }
 }

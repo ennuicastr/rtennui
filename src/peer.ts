@@ -628,18 +628,26 @@ export class Peer {
                     // Figure out the codec
                     let codec = trackInfo.codec.slice(1);
 
-                    // Find an environment
+                    const player = track.player =
+                        await videoPlayback.createVideoPlayback(
+                            codec,
+                            trackInfo.width || 640, trackInfo.height || 360
+                        );
+
+                    // Find an environment if needed
                     const config: wcp.VideoDecoderConfig = {
                         codec
                     };
                     let env: wcp.VideoDecoderEnvironment = null;
-                    try {
-                        env = await LibAVWebCodecs.getVideoDecoder(config);
-                    } catch (ex) {}
-                    if (!env) continue;
-
-                    const player = track.player =
-                        await videoPlayback.createVideoPlayback();
+                    if (!player.selfDecoding()) {
+                        try {
+                            env = await LibAVWebCodecs.getVideoDecoder(config);
+                        } catch (ex) {}
+                        if (!env) {
+                            player.close();
+                            continue;
+                        }
+                    }
 
                     this.room.emitEvent("track-started-video", {
                         peer: this.id,
@@ -648,10 +656,12 @@ export class Peer {
                     });
 
                     // Set up the decoder
-                    const dec = track.decoder = new Decoder();
-                    dec.envV = env;
-                    dec.config = config;
-                    await dec.init();
+                    if (env) {
+                        const dec = track.decoder = new Decoder();
+                        dec.envV = env;
+                        dec.config = config;
+                        await dec.init();
+                    }
 
                 } else if (trackInfo.codec[0] === "a") {
                     // Audio track
@@ -920,6 +930,20 @@ export class Peer {
         force?: boolean
     } = {}) {
         const track = this.tracks[packet.trackIdx];
+
+        /* If it's a video track with a player that self-decodes, we can just
+         * transfer the data directly. */
+        if (!track.decoder && track.video &&
+            (<videoPlayback.VideoPlayback> track.player).selfDecoding()) {
+            packet.decoded = new LibAVWebCodecs.EncodedVideoChunk({
+                data: unify(),
+                type: packet.key ? "key" : "delta",
+                timestamp: 0
+            });
+            packet.decoding = true;
+            packet.decodingRes();
+            return;
+        }
 
         // Get (but don't overload) the decoder
         const decoder = track.decoder;
@@ -1508,7 +1532,7 @@ class IncomingData {
      * The actual displayable data.
      * @private
      */
-    decoded: Float32Array[] | wcp.VideoFrame;
+    decoded: Float32Array[] | wcp.VideoFrame | wcp.EncodedVideoChunk;
 
     /**
      * The ideal timestamp at which to display this.
