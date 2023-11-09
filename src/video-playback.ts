@@ -358,9 +358,12 @@ class VideoPlaybackMediaSource extends VideoPlayback {
  *                VideoPlaybacks.
  */
 export async function createVideoPlayback(
-    codec: string, width: number, height: number
+    supportDecoding: boolean, codec: string, width: number, height: number
 ): Promise<VideoPlayback> {
-    if (
+    // Prefer WebCodecs for control
+    if (supportDecoding) {
+        return new VideoPlaybackCanvas();
+    } else if (
         codec === "vp8" &&
         typeof MediaSource !== "undefined" &&
         MediaSource.isTypeSupported(`video/webm; codecs=${codec}`)
@@ -368,7 +371,6 @@ export async function createVideoPlayback(
         const ret = new VideoPlaybackMediaSource(codec, width, height);
         await ret.init();
         return ret;
-    } else {
-        return new VideoPlaybackCanvas();
     }
+    return null;
 }

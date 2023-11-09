@@ -628,25 +628,26 @@ export class Peer {
                     // Figure out the codec
                     let codec = trackInfo.codec.slice(1);
 
-                    const player = track.player =
-                        await videoPlayback.createVideoPlayback(
-                            codec,
-                            trackInfo.width || 640, trackInfo.height || 360
-                        );
-
-                    // Find an environment if needed
+                    // Find a decoding environment
                     const config: wcp.VideoDecoderConfig = {
                         codec
                     };
                     let env: wcp.VideoDecoderEnvironment = null;
-                    if (!player.selfDecoding()) {
-                        try {
-                            env = await LibAVWebCodecs.getVideoDecoder(config);
-                        } catch (ex) {}
-                        if (!env) {
-                            player.close();
-                            continue;
-                        }
+                    try {
+                        env = await LibAVWebCodecs.getVideoDecoder(config);
+                    } catch (ex) {}
+
+                    const player = track.player =
+                        await videoPlayback.createVideoPlayback(
+                            !!env, codec,
+                            trackInfo.width || 640, trackInfo.height || 360
+                        );
+
+                    if (!player) {
+                        continue;
+                    } else if (!player.selfDecoding() && !env) {
+                        player.close();
+                        continue;
                     }
 
                     this.room.emitEvent("track-started-video", {
