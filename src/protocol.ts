@@ -137,6 +137,7 @@ export const protocol = {
             data: 5
             /* Format of data:
              * index: network integer
+             * gop index: network integer
              * part: network integer
              * part count: network integer
              * data: ... */

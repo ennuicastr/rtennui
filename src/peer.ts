@@ -851,6 +851,7 @@ export class Peer {
             const datau8 = new Uint8Array(data.buffer);
             const offset = {offset: p.data};
             const packetIdx = util.decodeNetInt(datau8, offset);
+            const gopIdx = packetIdx - util.decodeNetInt(datau8, offset);
 
             if (this.data.length === 0)
                 this.offset = packetIdx;
@@ -863,6 +864,19 @@ export class Peer {
             while (this.data.length <= idxOffset)
                 this.data.push(null);
 
+            const gopIdxOffset = gopIdx - this.offset;
+            if (gopIdxOffset !== idxOffset &&
+                gopIdxOffset >= 0 && gopIdxOffset < this.data.length) {
+                /* Make sure we know this packet is a keyframe so we don't skip
+                 * it */
+                if (!this.data[gopIdxOffset]) {
+                    this.data[gopIdxOffset] =
+                        new IncomingData(trackIdx, gopIdx, true);
+                    this.tracks[trackIdx].duration +=
+                        this.stream[trackIdx].frameDuration;
+                }
+            }
+
             const partIdx = util.decodeNetInt(datau8, offset);
             const partCt = util.decodeNetInt(datau8, offset);
 
@@ -870,10 +884,12 @@ export class Peer {
             let idata: IncomingData = this.data[idxOffset];
             if (!idata) {
                 idata = this.data[idxOffset] =
-                    new IncomingData(trackIdx, packetIdx, key, partCt);
+                    new IncomingData(trackIdx, packetIdx, key);
                 this.tracks[trackIdx].duration +=
                     this.stream[trackIdx].frameDuration;
             }
+            if (!idata.encoded)
+                idata.encoded = Array(partCt).fill(null);
             if (partCt !== idata.encoded.length) {
                 // ??? Inconsistent data!
                 return;
@@ -897,7 +913,7 @@ export class Peer {
     decodeMany() {
         for (const packet of this.data) {
             // If we don't have this packet, we can't decode past it
-            if (!packet)
+            if (!packet || !packet.encoded)
                 break;
 
             // If this packet is incomplete, we can't decode it or past it
@@ -1079,12 +1095,13 @@ export class Peer {
 
     /**
      * Get the next packet of data.
+     * @param force  Shift even if that means skipping a keyframe.
      * @private
      */
-    shift() {
+    shift(force = false) {
         while (this.data.length > 1) {
             const next: IncomingData = this.data[0];
-            if (!next) {
+            if (!next && !force) {
                 // Dropped!
                 this.data.shift();
                 this.offset++;
@@ -1094,14 +1111,18 @@ export class Peer {
 
             // next is set, but might be incomplete
             let complete = true;
-            for (const part of next.encoded) {
-                if (!part) {
-                    complete = false;
-                    break;
+            if (next.encoded) {
+                for (const part of next.encoded) {
+                    if (!part) {
+                        complete = false;
+                        break;
+                    }
                 }
+            } else {
+                complete = false;
             }
 
-            if (!complete && next.key) {
+            if (!complete && next.key && !force) {
                 // Can't skip keyframes
                 return null;
             }
@@ -1145,6 +1166,14 @@ export class Peer {
                 // Stream was closed
                 this.playing = false;
                 break;
+            }
+
+            /* Do we have *way* too much data (more than 500ms)? */
+            while (Math.max.apply(Math, this.tracks.map(x => x.duration))
+                   >= 500000) {
+                const chunk = this.shift(true);
+                if (chunk)
+                    chunk.close();
             }
 
             /* Do we have too much data (more than double our ideal buffer),
@@ -1494,14 +1523,9 @@ class IncomingData {
          * Is this a keyframe?
          * @private
          */
-        public key: boolean,
-
-        /**
-         * The number of parts to expect.
-         */
-        partCt: number
+        public key: boolean
     ) {
-        this.encoded = Array(partCt).fill(null);
+        this.encoded = null;
         this.decoded = null;
         this.idealTimestamp = -1;
         this.decoding = false;

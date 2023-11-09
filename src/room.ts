@@ -90,6 +90,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         super();
         this._streamId = 0;
         this._videoTracks = [];
+        this._videoTrackKeyframes = [];
         this._audioTracks = [];
         this._serverReliable = null;
         this._serverUnreliable = null;
@@ -533,6 +534,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Set up the stream
         await stream.init();
         this._videoTracks.push(stream);
+        this._videoTrackKeyframes.push(0);
         stream.on("data", data => this._onOutgoingData(stream, data));
         stream.on("error", error => this._onOutgoingError(stream, error));
         this._newOutgoingStream();
@@ -559,6 +561,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Stop and remove it
         stream.close();
         this._videoTracks.splice(idx, 1);
+        this._videoTrackKeyframes.splice(idx, 1);
         this._newOutgoingStream();
     }
 
@@ -778,6 +781,15 @@ export class Connection extends abstractRoom.AbstractRoom {
             (this._streamId << 4) |
             trackIdx;
 
+        // Keyframe index
+        let gopIdx = 0;
+        if (isVideo) {
+            if (key)
+                this._videoTrackKeyframes[trackIdx] = packetIdx;
+            else
+                gopIdx = packetIdx - this._videoTrackKeyframes[trackIdx];
+        }
+
         // Get the data out
         const datau8 = new Uint8Array(data.byteLength);
         data.copyTo(datau8);
@@ -785,6 +797,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Make and send the messages
         const p = prot.parts.data;
         const packetIdxBytes = util.netIntBytes(packetIdx);
+        const gopIdxBytes = util.netIntBytes(gopIdx);
         let idx = 0;
         const ct = Math.ceil(datau8.length / perPacket);
         const ctBytes = util.netIntBytes(ct);
@@ -793,15 +806,17 @@ export class Connection extends abstractRoom.AbstractRoom {
             const idxBytes = util.netIntBytes(idx);
 
             const msg = net.createPacket(
-                p.length + packetIdxBytes + idxBytes + ctBytes +
+                p.length + packetIdxBytes + gopIdxBytes + idxBytes + ctBytes +
                 dataPart.length,
                 this._id, prot.ids.data,
                 [
                     [p.info, 1, info],
                     [p.data, 0, packetIdx],
-                    [p.data + packetIdxBytes, 0, idx],
-                    [p.data + packetIdxBytes + idxBytes, 0, ct],
-                    [p.data + packetIdxBytes + idxBytes + ctBytes, dataPart],
+                    [p.data + packetIdxBytes, 0, gopIdx],
+                    [p.data + packetIdxBytes + gopIdxBytes, 0, idx],
+                    [p.data + packetIdxBytes + gopIdxBytes + idxBytes, 0, ct],
+                    [p.data + packetIdxBytes + gopIdxBytes + idxBytes + ctBytes,
+                     dataPart],
                 ]
             );
 
@@ -877,6 +892,11 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Our video tracks.
      */
     private _videoTracks: outgoingVideoStream.OutgoingVideoStream[];
+
+    /**
+     * The index of the last keyframe from each video track.
+     */
+    private _videoTrackKeyframes: number[];
 
     /**
      * Our audio tracks.
