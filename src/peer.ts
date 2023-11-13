@@ -84,6 +84,7 @@ export class Peer {
         this.reliable = this.semireliable = this.unreliable = null;
         this.reliabilityProber = null;
         this.reliability = net.Reliability.SEMIRELIABLE;
+        this.lastReliableRelayTime = 0;
         this.pingInterval = null;
         this.pongs = [];
         this._idealBufferMs = 0;
@@ -798,33 +799,18 @@ export class Peer {
             // c is the "command" (tho these are generally not command-like)
             switch (info.c) {
                 case "dropRate":
-                    /* Our drop rate (to this peer) is high. Either reconnect
-                     * with more retransmits, or abort the P2P connection
-                     * entirely and proxy via the server. */
-                    switch (this.reliability) {
-                        case net.Reliability.RELIABLE:
-                            // Use a semi-reliable connection
-                            this.reliability = net.Reliability.SEMIRELIABLE;
-                            if (!this.semireliable)
-                                this.p2p();
-                            break;
-
-                        case net.Reliability.SEMIRELIABLE:
-                        case net.Reliability.UNRELIABLE:
-                        default:
-                            // Don't use any P2P connections
-                            this.reliability = net.Reliability.UNRELIABLE;
-                            if (this.semireliable) {
-                                this.semireliable.close();
-                                this.semireliable = null;
-                            }
-                            if (this.reliable) {
-                                this.reliable.close();
-                                this.reliable = null;
-                            }
-                            this.p2p();
-                            break;
+                    /* Our drop rate (to this peer) is high. Abort the P2P
+                     * connection and relay. */
+                    this.reliability = net.Reliability.UNRELIABLE;
+                    if (this.semireliable) {
+                        this.semireliable.close();
+                        this.semireliable = null;
                     }
+                    if (this.reliable) {
+                        this.reliable.close();
+                        this.reliable = null;
+                    }
+                    this.p2p();
                     break;
             }
         } catch (ex) {}
@@ -1232,10 +1218,7 @@ export class Peer {
                 this.id, prot.ids.info,
                 [[p.data, data]]
             );
-            if (this.reliable)
-                this.reliable.send(msg);
-            else
-                this.room._sendServer(msg);
+            this.room._sendServer(msg);
 
             // And wait to tell them again
             this.dropInfoTimeout = setTimeout(() => {
@@ -1373,6 +1356,12 @@ export class Peer {
      * @private
      */
     reliability: net.Reliability;
+
+    /**
+     * The last time we sent a reliable, relayed message to this peer. Used to
+     * ensure connectivity is periodically probed.
+     */
+    lastReliableRelayTime: number;
 
     /**
      * Interval used to ping the reliable socket for timing info.

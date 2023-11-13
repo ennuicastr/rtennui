@@ -630,9 +630,13 @@ export class Connection extends abstractRoom.AbstractRoom {
      *                     send this data
      */
     private _sendData(buf: ArrayBuffer, reliability: net.Reliability) {
-        // Send directly
         let needRelay: number[] = [];
         let phi = 0, plo = -1;
+        let forceReliableRelay = false;
+        const now = performance.now();
+        const oneSecondAgo = now - 1000;
+
+        // Send directly
         for (let peerIdx = 0; peerIdx < this._peers.length; peerIdx++) {
             plo++;
             if (plo >= 8) {
@@ -674,6 +678,15 @@ export class Connection extends abstractRoom.AbstractRoom {
                         peerRelay = true;
                 }
             } catch (ex) {
+                peerRelay = true;
+            }
+
+            // If we haven't relayed recently, do so
+            if (peer.lastReliableRelayTime < oneSecondAgo)
+                forceReliableRelay = true;
+            if (forceReliableRelay ||
+                (peerRelay && reliability === net.Reliability.RELIABLE)) {
+                peer.lastReliableRelayTime = now;
                 peerRelay = true;
             }
 
