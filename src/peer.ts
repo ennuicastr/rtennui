@@ -627,10 +627,16 @@ export class Peer {
 
                     // Figure out the codec
                     let codec = trackInfo.codec.slice(1);
+                    let wcCodec = codec;
+                    if (codec === "vp8lo") {
+                        /* vp8lo is an internal name for "VP8, but be gentle,
+                         * because there will be software decoders" */
+                        wcCodec = "vp8";
+                    }
 
                     // Find a decoding environment
                     const config: wcp.VideoDecoderConfig = {
-                        codec
+                        codec: wcCodec
                     };
                     let env: wcp.VideoDecoderEnvironment = null;
                     try {
@@ -639,14 +645,16 @@ export class Peer {
 
                     const player = track.player =
                         await videoPlayback.createVideoPlayback(
-                            !!env, codec,
+                            codec,
                             trackInfo.width || 640, trackInfo.height || 360
                         );
 
                     if (!player) {
+                        tracks[i] = null;
                         continue;
                     } else if (!player.selfDecoding() && !env) {
                         player.close();
+                        tracks[i] = null;
                         continue;
                     }
 
@@ -668,6 +676,7 @@ export class Peer {
                     // Audio track
                     if (trackInfo.codec !== "aopus") {
                         // Unsupported
+                        tracks[i] = null;
                         continue;
                     }
 
@@ -1133,8 +1142,10 @@ export class Peer {
             this.offset++;
             this.logDrop(false);
             const track = this.tracks[next.trackIdx];
-            track.duration -=
-                this.stream[next.trackIdx].frameDuration;
+            if (track) {
+                track.duration -=
+                    this.stream[next.trackIdx].frameDuration;
+            }
 
             if (!complete)
                 continue;
@@ -1170,7 +1181,7 @@ export class Peer {
             }
 
             /* Do we have *way* too much data (more than 500ms)? */
-            while (Math.max.apply(Math, this.tracks.map(x => x.duration))
+            while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= 500000) {
                 const chunk = this.shift(true);
                 if (chunk)
@@ -1180,7 +1191,7 @@ export class Peer {
             /* Do we have too much data (more than double our ideal buffer),
              * and more than 250ms? */
             const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
-            while (Math.max.apply(Math, this.tracks.map(x => x.duration))
+            while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= tooMuch) {
                 const chunk = this.shift();
                 if (chunk)

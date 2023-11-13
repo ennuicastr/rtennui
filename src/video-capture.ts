@@ -147,7 +147,22 @@ class VideoCaptureWebCodecs extends VideoCapture {
     ) {
         super();
 
-        this._framerate = _ms.getVideoTracks()[0].getSettings().frameRate;
+        const settings = _ms.getVideoTracks()[0].getSettings();
+        this._framerate = settings.frameRate;
+        let width = this._width = settings.width;
+        let height = this._height = settings.height;
+
+        if (_config.codec === "vp8lo") {
+            /* "vp8lo" really just means "VP8, but be gentle for software
+             * decoders" */
+            _config.codec = "vp8";
+            width = this._width =
+                Math.round(this._width / this._height * 360 / 16) * 16;
+            height = this._height = 360;
+        }
+
+        _config.width = width;
+        _config.height = height;
     }
 
     async initEncoder() {
@@ -211,11 +226,11 @@ class VideoCaptureWebCodecs extends VideoCapture {
     }
 
     override getWidth(): number {
-        return this._ms.getVideoTracks()[0].getSettings().width;
+        return this._width;
     }
 
     override getHeight(): number {
-        return this._ms.getVideoTracks()[0].getSettings().height;
+        return this._height;
     }
 
     override getFramerate(): number {
@@ -238,6 +253,12 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
     // When to next force a keyframe
     private _forceKeyframe: number;
+
+    // Nominal video width
+    private _width: number;
+
+    // Nominal video height
+    private _height: number;
 
     // Video framerate
     private _framerate: number;
@@ -367,6 +388,8 @@ class VideoCaptureMediaRecorder extends VideoCapture {
         this._codec = "" + _config.codec;
         if (/^vp09/.test("" + _config.codec))
             this._codec = "vp9";
+        else if (/^vp8/.test("" + _config.codec))
+            this._codec = "vp8";
 
         // And bitrate
         this._bitrate = _config.bitrate || _config.height * 2500;
@@ -589,6 +612,12 @@ export async function codecSupportList(): Promise<string[]> {
                 if (support.supported) {
                     cs[codec] = cap;
                     csl.push(codec);
+                    if (codec === "vp8") {
+                        /* "vp8lo" is just vp8 but low-res, for software
+                         * decoders */
+                        cs.vp8lo = cap;
+                        csl.push("vp8lo");
+                    }
                 }
             } catch (ex) {}
         }
@@ -597,7 +626,7 @@ export async function codecSupportList(): Promise<string[]> {
     if (typeof MediaRecorder !== "undefined") {
         // Check what's supported by MediaRecorder
         for (const codec of [
-            ["vp9", "vp09.00.51.08"], ["vp8", "vp8"]
+            ["vp9", "vp09.00.51.08"], ["vp8", "vp8"], ["vp8", "vp8lo"]
         ]) {
             const mrCodec = codec[0];
             const wcCodec = codec[1];

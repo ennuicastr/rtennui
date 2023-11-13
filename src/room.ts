@@ -25,6 +25,7 @@ import * as peer from "./peer";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
 import * as videoCapture from "./video-capture";
+import * as videoPlayback from "./video-playback";
 
 import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
@@ -127,15 +128,8 @@ export class Connection extends abstractRoom.AbstractRoom {
             for (const codec of await videoCapture.codecSupportList())
                 enc.push("v" + codec);
 
-            for (const codec of ["vp09.00.51.08", "vp8"]) {
-                try {
-                    await LibAVWebCodecs.getVideoDecoder({codec});
-                    dec.push("v" + codec);
-                } catch (ex) {}
-            }
-            // FIXME
-            if (dec.length === 0)
-                dec.push("vvp8");
+            for (const codec of await videoPlayback.codecSupportList())
+                dec.push("v" + codec);
 
             /* We don't use native WebCodecs for audio, so our support is
              * always the same */

@@ -22,6 +22,12 @@ declare let LibAV: libavT.LibAVWrapper;
 import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
+declare let VideoDecoder: any;
+
+// Our codec->system support matrix
+const codecSupport: Record<string, string> = Object.create(null);
+let codecSupportArr: string[] | null = null;
+
 /**
  * General interface for any video playback subsystem.
  */
@@ -60,7 +66,7 @@ export abstract class VideoPlayback extends events.EventEmitter {
 /**
  * Playback by painting on a canvas.
  */
-export class VideoPlaybackCanvas extends VideoPlayback {
+export class VideoPlaybackVideoDecoderCanvas extends VideoPlayback {
     constructor() {
         super();
         const canvasBox = this._canvasBox = document.createElement("div");
@@ -348,6 +354,60 @@ class VideoPlaybackMediaSource extends VideoPlayback {
 }
 
 /**
+ * Get our codec support list (and also create it if needed).
+ */
+export async function codecSupportList(): Promise<string[]> {
+    if (codecSupportArr)
+        return codecSupportArr;
+
+    const cs = codecSupport;
+    const csl = codecSupportArr = [];
+
+    if (typeof VideoDecoder !== "undefined") {
+        // Check for what's supported *directly* by VideoDecoder
+        for (const codec of ["vp09.00.51.08", "vp8"]) {
+            try {
+                const support = await VideoDecoder.isConfigSupported({codec});
+                if (support.supported) {
+                    cs[codec] = "vd";
+                    csl.push(codec);
+                    if (codec === "vp8") {
+                        /* "vp8lo" is just vp8 but low-res, for software
+                         * decoders */
+                        cs.vp8lo = "vd";
+                        csl.push("vp8lo");
+                    }
+                }
+            } catch (ex) {}
+        }
+    }
+
+    // Check if libavjs-webcodecs-polyfill supports vp8 in software
+    if (!cs.vp8) {
+        try {
+            const support = await LibAVWebCodecs.VideoDecoder.isConfigSupported({
+                codec: "vp8"
+            });
+            if (support.supported) {
+                cs.vp8lo = "vd";
+                csl.push("vp8lo");
+            }
+        } catch (ex) {}
+    }
+
+    // We only check for VP8 with MediaSource
+    if (!cs.vp8 && !cs.vp8lo &&
+        typeof MediaSource !== "undefined" &&
+        MediaSource.isTypeSupported("video/webm; codecs=vp8")) {
+        cs.vp8 = cs.vp8lo = "ms";
+        csl.push("vp8");
+        csl.push("vp8lo");
+    }
+
+    return csl;
+}
+
+/**
  * Create a supported VideoPlayback.
  * @param codec  Codec to display. Only used by self-decoding VideoPlaybacks,
  *               but the caller won't know whether a self-decoding
@@ -358,19 +418,22 @@ class VideoPlaybackMediaSource extends VideoPlayback {
  *                VideoPlaybacks.
  */
 export async function createVideoPlayback(
-    supportDecoding: boolean, codec: string, width: number, height: number
+    codec: string, width: number, height: number
 ): Promise<VideoPlayback> {
-    // Prefer WebCodecs for control
-    if (supportDecoding) {
-        return new VideoPlaybackCanvas();
-    } else if (
-        codec === "vp8" &&
-        typeof MediaSource !== "undefined" &&
-        MediaSource.isTypeSupported(`video/webm; codecs=${codec}`)
-    ) {
-        const ret = new VideoPlaybackMediaSource(codec, width, height);
-        await ret.init();
-        return ret;
+    console.log("Playback of ", codec, " in ", codecSupport);
+
+    switch (codecSupport[codec]) {
+        case "vd":
+            return new VideoPlaybackVideoDecoderCanvas();
+
+        case "ms":
+        {
+            const ret = new VideoPlaybackMediaSource(codec, width, height);
+            await ret.init();
+            return ret;
+        }
+
+        default:
+            return null;
     }
-    return null;
 }
