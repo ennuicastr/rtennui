@@ -420,8 +420,6 @@ export async function codecSupportList(): Promise<string[]> {
 export async function createVideoPlayback(
     codec: string, width: number, height: number
 ): Promise<VideoPlayback> {
-    console.log("Playback of ", codec, " in ", codecSupport);
-
     switch (codecSupport[codec]) {
         case "vd":
             return new VideoPlaybackVideoDecoderCanvas();

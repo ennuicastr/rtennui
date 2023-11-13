@@ -476,7 +476,6 @@ class VideoCaptureMediaRecorder extends VideoCapture {
                 if (fr && Number.isFinite(fr))
                     this._framerate = fr;
             }
-            console.log(`Framerate is ${this._framerate}`);
         }
 
         // And read data in the background
