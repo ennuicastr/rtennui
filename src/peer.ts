@@ -99,6 +99,7 @@ export class Peer {
         this.reliable = this.semireliable = this.unreliable = null;
         this.reliabilityProber = null;
         this.reliability = net.Reliability.SEMIRELIABLE;
+        this.lastReliableRelayTime = 0;
         this.pingInterval = null;
         this.pongs = [];
         this._idealBufferFromPingMs = 0;
@@ -877,6 +878,19 @@ export class Peer {
                             this.p2p();
                             break;
                     }
+
+                    /* Our drop rate (to this peer) is high. Abort the P2P
+                     * connection and relay. */
+                    this.reliability = net.Reliability.UNRELIABLE;
+                    if (this.semireliable) {
+                        this.semireliable.close();
+                        this.semireliable = null;
+                    }
+                    if (this.reliable) {
+                        this.reliable.close();
+                        this.reliable = null;
+                    }
+                    this.p2p();
                     break;
             }
         } catch (ex) {}
@@ -1398,10 +1412,7 @@ export class Peer {
                 this.id, prot.ids.info,
                 [[p.data, data]]
             );
-            if (this.reliable)
-                this.reliable.send(msg);
-            else
-                this.room._sendServer(msg);
+            this.room._sendServer(msg);
 
             // And wait to tell them again
             this.dropInfoTimeout = setTimeout(() => {
@@ -1559,6 +1570,12 @@ export class Peer {
      * @private
      */
     reliability: net.Reliability;
+
+    /**
+     * The last time we sent a reliable, relayed message to this peer. Used to
+     * ensure connectivity is periodically probed.
+     */
+    lastReliableRelayTime: number;
 
     /**
      * Interval used to ping the reliable socket for timing info.
