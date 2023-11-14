@@ -415,6 +415,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                     util.decodeText(
                         (new Uint8Array(msg.buffer)).subarray(p.data));
                 this._formats = JSON.parse(formatsJSON);
+                this._formatsUpdated();
                 break;
             }
 
@@ -506,11 +507,9 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     /**
-     * Add an outgoing video track.
-     * @param ms  Stream to add.
+     * Choose a video codec.
      */
-    async addVideoTrack(ms: MediaStream) {
-        // Choose a codec
+    private _chooseVideoCodec(): string {
         let codec: string = null;
         for (const opt of encoders) {
             if (opt[0] !== "v")
@@ -522,6 +521,16 @@ export class Connection extends abstractRoom.AbstractRoom {
         }
         if (!codec)
             throw new Error("No supported video codec found!");
+        return codec;
+    }
+
+    /**
+     * Add an outgoing video track.
+     * @param ms  Stream to add.
+     */
+    async addVideoTrack(ms: MediaStream) {
+        // Choose a codec
+        const codec = this._chooseVideoCodec();
 
         const stream = new outgoingVideoStream.OutgoingVideoStream(ms, codec);
 
@@ -597,6 +606,46 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Stop and remove it
         stream.close();
         this._audioTracks.splice(idx, 1);
+        this._newOutgoingStream();
+    }
+
+    /**
+     * Called when the formats list is updated to reinitialize any streams that
+     * need to be done in a different format.
+     */
+    private async _formatsUpdated() {
+        const fromFormats =
+            this._videoTracks.map(x => "v" + x.getCodec())
+            .concat(this._audioTracks.map(x => "aopus"))
+            .join(",");
+
+        // Find new formats for each track
+        const vCodec = this._chooseVideoCodec();
+        const toFormats =
+            Array(this._videoTracks.length).fill(vCodec)
+            .concat(Array(this._audioTracks.length).fill("aopus"))
+            .join(",");
+
+        if (fromFormats === toFormats) {
+            // No change needed
+            return;
+        }
+
+        // Replace tracks!
+        for (let i = 0; i < this._videoTracks.length; i++) {
+            const inVT = this._videoTracks[i];
+            if (inVT.getCodec() === vCodec)
+                continue;
+
+            // Replace the codec
+            inVT.close();
+            this._videoTracks[i] = new outgoingVideoStream.OutgoingVideoStream(
+                inVT.ms, vCodec
+            );
+        }
+
+        // FIXME: If we ever support multiple audio codecs, replace those too
+
         this._newOutgoingStream();
     }
 
