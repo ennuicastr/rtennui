@@ -19,9 +19,8 @@ component is at https://github.com/ennuicastr/rtennui-server .
 ## Status
 
 RTEnnui is largely usable for audio, with the major hole being that you need to
-“bring your own VAD”. Video support is technically functional, but suffers from
-a lack of APIs to actually capture video in real time, so it is not recommended
-to use it yet.
+“bring your own VAD”. Video support works on all browsers, but is rather limited
+on Firefox in several ways.
 
 
 ## Usage
