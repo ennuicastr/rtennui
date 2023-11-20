@@ -1104,7 +1104,7 @@ export class Peer {
     shift(force = false) {
         while (this.data.length > 1) {
             const next: IncomingData = this.data[0];
-            if (!next && !force) {
+            if (!next) {
                 // Dropped!
                 this.data.shift();
                 this.offset++;
