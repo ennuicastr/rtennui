@@ -1012,13 +1012,6 @@ export class Peer {
         if (track.video) {
             if (decoder.keyChunkRequired && !packet.key) {
                 // Not decodable
-                packet.decoded = new decoder.envV.VideoFrame(
-                    new Uint8Array(640 * 360 * 4), {
-                    format: <any> "RGBA",
-                    codedWidth: 640,
-                    codedHeight: 360,
-                    timestamp: 0
-                });
                 packet.decodingRes();
                 return;
 
