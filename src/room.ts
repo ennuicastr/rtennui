@@ -907,6 +907,18 @@ export class Connection extends abstractRoom.AbstractRoom {
         stream.close();
     }
 
+    override _grade(by: number) {
+        if (!this._videoTracks.length)
+            return false;
+
+        let ret = false;
+        for (const track of this._videoTracks) {
+            if (track.grade(by))
+                ret = true;
+        }
+        return ret;
+    }
+
     // AbstractRoom methods
     /** @private */
     override _getOwnId() { return this._id; }

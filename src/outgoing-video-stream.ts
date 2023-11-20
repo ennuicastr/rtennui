@@ -94,6 +94,13 @@ export class OutgoingVideoStream extends events.EventEmitter {
     }
 
     /**
+     * (De)grade the quality.
+     */
+    grade(by: number) {
+        return this._capture.grade(by);
+    }
+
+    /**
      * Get the codec of this stream.
      */
     getCodec() {

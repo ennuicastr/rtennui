@@ -157,7 +157,7 @@ class VideoCaptureWebCodecs extends VideoCapture {
              * decoders" */
             _config.codec = "vp8";
             width = this._width =
-                Math.round(this._width / this._height * 360 / 16) * 16;
+                Math.round(this._width / this._height * 360 / 8) * 8;
             height = this._height = 360;
         }
 
