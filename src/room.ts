@@ -833,9 +833,14 @@ export class Connection extends abstractRoom.AbstractRoom {
                 gopIdx = packetIdx - this._videoTrackKeyframes[trackIdx];
         }
 
+        // Give it a timestamp
+        const timestamp = performance.now();
+        const tsBytes = util.netIntBytes(timestamp);
+
         // Get the data out
-        const datau8 = new Uint8Array(data.byteLength);
-        data.copyTo(datau8);
+        const datau8 = new Uint8Array(tsBytes + data.byteLength);
+        util.encodeNetInt(datau8, 0, timestamp);
+        data.copyTo(datau8.subarray(tsBytes));
 
         // Make and send the messages
         const p = prot.parts.data;

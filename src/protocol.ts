@@ -140,7 +140,9 @@ export const protocol = {
              * gop index: network integer
              * part: network integer
              * part count: network integer
-             * data: ... */
+             * data:
+             *   timestamp: network integer
+             *   frame data: ... */
         },
 
         /* relay:

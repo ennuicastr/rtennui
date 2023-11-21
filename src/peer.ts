@@ -86,7 +86,8 @@ export class Peer {
         this.reliability = net.Reliability.SEMIRELIABLE;
         this.pingInterval = null;
         this.pongs = [];
-        this._idealBufferMs = 0;
+        this._idealBufferFromPingMs = 0;
+        this._idealBufferFromDataMs = 0;
         this._incomingReliable = 0;
     }
 
@@ -526,7 +527,7 @@ export class Peer {
             pongs.shift();
 
         // Calculate the buffer size
-        this._idealBufferMs = Math.min(
+        this._idealBufferFromPingMs = Math.min(
             250, // No more than 250ms buffer
             Math.max(
                 10, // No less than 10ms buffer
@@ -544,18 +545,20 @@ export class Peer {
 
         if (this.reliable && this._incomingReliable &&
             this.pongs.length >= idealPings) {
+            const buffer = this.idealBufferMs() * 1.5;
+
             // Inform the user
             this.room.emitEvent("peer-p2p-latency", {
                 peer: this.id,
                 network: Math.round(pongs[pongs.length-1]),
-                buffer: Math.round(this._idealBufferMs * 1.5),
+                buffer: buffer,
                 playback: 50, // Just a guess
                 total: Math.round(
                     // The actual network latency...
                     pongs[pongs.length-1] +
 
                     // Our buffer
-                    this._idealBufferMs * 1.5 +
+                    buffer +
 
                     // The playback delay (final buffer)
                     50
@@ -571,24 +574,26 @@ export class Peer {
      * @private
      */
     idealBufferMs() {
+        // Ideal buffer from pings...
+        let idealBufferFromPingMs = this._idealBufferFromPingMs;
         if (
             this.reliability < net.Reliability.SEMIRELIABLE ||
             !this.reliable || !this._incomingReliable ||
             this.pongs.length < idealPings
         ) {
             // No reliable connection, so use the default
-            return 100;
+            idealBufferFromPingMs = 100;
         }
 
-        let min = 0;
-
         // No less than two frames
+        let minFromFrames = 0;
         if (this.stream) {
-            min = Math.max.apply(Math, this.stream.map(
+            minFromFrames = Math.max.apply(Math, this.stream.map(
                 x => x.frameDuration * 2 / 1000));
         }
 
-        const ideal = Math.max(this._idealBufferMs, min);
+        const ideal = Math.max(
+            idealBufferFromPingMs, this._idealBufferFromDataMs, minFromFrames);
 
         return ideal;
     }
@@ -890,6 +895,10 @@ export class Peer {
             const partIdx = util.decodeNetInt(datau8, offset);
             const partCt = util.decodeNetInt(datau8, offset);
 
+            let timestamp = -1;
+            if (partIdx === 0)
+                timestamp = util.decodeNetInt(datau8, offset);
+
             // Make the surrounding structure
             let idata: IncomingData = this.data[idxOffset];
             if (!idata) {
@@ -905,8 +914,46 @@ export class Peer {
                 return;
             }
             idata.encoded[partIdx] = datau8.slice(offset.offset);
+            if (partIdx === 0)
+                idata.remoteTimestamp = timestamp;
+            idata.arrivedTimestamp = performance.now();
 
         } catch (ex) {}
+
+        // Compute our ideal buffer from the data we now have
+        {
+            let diffs: number[] = [];
+            for (const idata of this.data) {
+                if (!idata || idata.remoteTimestamp < 0 ||
+                    idata.arrivedTimestamp < 0)
+                    continue;
+                diffs.push(Math.abs(
+                    idata.arrivedTimestamp - idata.remoteTimestamp));
+            }
+
+            let idealBuffer = 0;
+            if (diffs.length) {
+                diffs.sort();
+
+                /* The buffer comes from the *range* of possible times it might
+                 * take to receive data. */
+                idealBuffer =
+                    (diffs[diffs.length-1] - diffs[0]);
+            } else {
+                this._idealBufferFromDataMs = 0;
+            }
+
+            /* The value we get raw is a snapshot, and doesn't include any data
+             * we've already gone past, so if it's lower than the current
+             * value, weight it heavily. */
+            if (idealBuffer > this._idealBufferFromDataMs) {
+                this._idealBufferFromDataMs = idealBuffer;
+            } else {
+                this._idealBufferFromDataMs =
+                    (this._idealBufferFromDataMs * 255/256) +
+                    (idealBuffer / 256);
+            }
+        }
 
         // Decode what we can
         this.decodeMany();
@@ -1442,10 +1489,14 @@ export class Peer {
     pongs: number[];
 
     /**
-     * Ideal buffer duration *in milliseconds*, based on ping-pong time. Use
-     * the getter instead of this.
+     * Ideal buffer duration in milliseconds, based on ping-pong time.
      */
-    private _idealBufferMs: number;
+    private _idealBufferFromPingMs: number;
+
+    /**
+     * Ideal buffer duration in milliseconds, based on the actual data.
+     */
+    private _idealBufferFromDataMs: number;
 
     /**
      * Number of incoming reliable streams. A number instead of a boolean so
@@ -1532,7 +1583,9 @@ class IncomingData {
     ) {
         this.encoded = null;
         this.decoded = null;
-        this.idealTimestamp = -1;
+        this.idealTimestamp =
+            this.remoteTimestamp =
+            this.arrivedTimestamp = -1;
         this.decoding = false;
         this.decodingPromise =
             new Promise<void>(res => this.decodingRes = res);
@@ -1562,6 +1615,18 @@ class IncomingData {
      * @private
      */
     decoded: Float32Array[] | wcp.VideoFrame | wcp.EncodedVideoChunk;
+
+    /**
+     * The timestamp for this chunk, as specified by the sender.
+     * @private
+     */
+    remoteTimestamp: number;
+
+    /**
+     * The timestamp when (the last part of) this chunk arrived.
+     * @private
+     */
+    arrivedTimestamp: number;
 
     /**
      * The ideal timestamp at which to display this.
