@@ -1228,9 +1228,8 @@ export class Peer {
                     chunk.close();
             }
 
-            /* Do we have too much data (more than double our ideal buffer),
-             * and more than 250ms? */
-            const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
+            /* Do we have too much data (more than double our ideal buffer)? */
+            const tooMuch = this.idealBufferMs() * 2000;
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= tooMuch) {
                 const chunk = this.shift();
@@ -1253,11 +1252,13 @@ export class Peer {
             if (!chunk.decoding)
                 this.decodeOne(chunk, {force: true});
 
-            if (chunk.idealTimestamp < 0) {
-                chunk.idealTimestamp = performance.now();
-            } else {
+            // If we blew the deadline, make a new deadline
+            const now = performance.now();
+            chunk.idealTimestamp = Math.max(chunk.idealTimestamp, now);
+
+            {
                 // Wait until we're actually supposed to be playing this chunk
-                const wait = chunk.idealTimestamp - performance.now();
+                const wait = chunk.idealTimestamp - now;
                 if (wait > 0)
                     await new Promise(res => setTimeout(res, wait));
             }
@@ -1293,11 +1294,16 @@ export class Peer {
             })();
 
             // Set the time on the next relevant packet
-            for (const next of this.data) {
-                if (next && next.trackIdx === chunk.trackIdx) {
-                    next.idealTimestamp = chunk.idealTimestamp +
-                        Math.round(this.stream[chunk.trackIdx].frameDuration / 1000);
-                    break;
+            if (chunk.remoteTimestamp >= 0) {
+                for (const next of this.data) {
+                    if (next && next.remoteTimestamp >= 0) {
+                        next.idealTimestamp = Math.max(
+                            chunk.idealTimestamp +
+                            next.remoteTimestamp - chunk.remoteTimestamp,
+                            chunk.idealTimestamp
+                        );
+                        break;
+                    }
                 }
             }
         }
