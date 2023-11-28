@@ -29,6 +29,16 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
 /**
+ * Timeout between checking for high drop rate.
+ */
+const dropTimeout = 2000;
+
+/**
+ * Timeout before forgetting about high drop rate.
+ */
+const dropForgetTimeout = 5000;
+
+/**
  * A single libav instance used to resample.
  * @private
  */
@@ -76,6 +86,10 @@ export class Peer {
         }
         this.drops = 0;
         this.dropInfoTimeout = null;
+
+        // And remember if they've told us we have a high drop rate
+        this.outgoingDrops = false;
+        this.outgoingDropsTimeout = null;
 
         this.tracks = null;
         this.rtc = null;
@@ -816,9 +830,21 @@ export class Peer {
             // c is the "command" (tho these are generally not command-like)
             switch (info.c) {
                 case "dropRate":
-                    /* Our drop rate (to this peer) is high. Either reconnect
-                     * with more retransmits, or abort the P2P connection
-                     * entirely and proxy via the server. */
+                    // Our drop rate to this peer is high. Mark it.
+                    this.outgoingDrops = true;
+                    if (this.outgoingDropsTimeout)
+                        clearTimeout(this.outgoingDropsTimeout);
+                    this.outgoingDropsTimeout = setTimeout(() => {
+                        this.outgoingDrops = false;
+                    }, dropForgetTimeout);
+
+                    // Possibly just degrade for now
+                    if (this.room._grade(0.5))
+                        break;
+
+                    /* Couldn't degrade. Either reconnect with more
+                     * retransmits, or abort the P2P connection entirely and
+                     * proxy via the server. */
                     switch (this.reliability) {
                         case net.Reliability.RELIABLE:
                             // Use a semi-reliable connection
@@ -927,8 +953,7 @@ export class Peer {
                 if (!idata || idata.remoteTimestamp < 0 ||
                     idata.arrivedTimestamp < 0)
                     continue;
-                diffs.push(Math.abs(
-                    idata.arrivedTimestamp - idata.remoteTimestamp));
+                diffs.push(idata.arrivedTimestamp - idata.remoteTimestamp);
             }
 
             let idealBuffer = 0;
@@ -1202,8 +1227,8 @@ export class Peer {
      * @private
      */
     async play() {
-        /* Set the ideal start time on the first packet to the ideal buffering
-         * time */
+        /* Set the ideal start time on the first packet to give some time to
+         * buffer */
         for (const chunk of this.data) {
             if (!chunk)
                 continue;
@@ -1228,8 +1253,9 @@ export class Peer {
                     chunk.close();
             }
 
-            /* Do we have too much data (more than double our ideal buffer)? */
-            const tooMuch = this.idealBufferMs() * 2000;
+            /* Do we have too much data (more than double our ideal buffer, and
+             * more than 250ms)? */
+            const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= tooMuch) {
                 const chunk = this.shift();
@@ -1259,8 +1285,8 @@ export class Peer {
             {
                 // Wait until we're actually supposed to be playing this chunk
                 const wait = chunk.idealTimestamp - now;
-                if (wait > 0)
-                    await new Promise(res => setTimeout(res, wait));
+                if (wait > 2)
+                    await new Promise(res => setTimeout(res, wait - 2));
             }
 
             // Decode and present it in the background
@@ -1297,9 +1323,12 @@ export class Peer {
             if (chunk.remoteTimestamp >= 0) {
                 for (const next of this.data) {
                     if (next && next.remoteTimestamp >= 0) {
-                        next.idealTimestamp = Math.max(
-                            chunk.idealTimestamp +
+                        const delay = Math.min(
                             next.remoteTimestamp - chunk.remoteTimestamp,
+                            40
+                        );
+                        next.idealTimestamp = Math.max(
+                            chunk.idealTimestamp + delay,
                             chunk.idealTimestamp
                         );
                         break;
@@ -1355,7 +1384,7 @@ export class Peer {
                 for (let i = 0; i < len; i++)
                     this.dropLog.push(false);
                 this.drops = 0;
-            }, 5000);
+            }, dropTimeout);
         }
     }
 
@@ -1426,6 +1455,20 @@ export class Peer {
      * @private
      */
     dropInfoTimeout: number | null;
+
+    /**
+     * If the # of drops *outgoing* has been reported high, we set this, and
+     * the central room management can use it to determine how to react.
+     * @private
+     */
+    outgoingDrops: boolean;
+
+    /**
+     * If the remote side stops telling us about drops, we forget about it
+     * using this timeout.
+     * @private
+     */
+    outgoingDropsTimeout: number | null;
 
     /**
      * Each track's information.

@@ -99,6 +99,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._serverReliability = net.Reliability.RELIABLE;
         this._serverReliabilityProber = null;
         this._peers = [];
+        this._upgradeTimer = null;
     }
 
     /**
@@ -230,6 +231,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this.emitEvent("connected", null);
 
         this._connectUnreliable();
+        this._upgradeTimer = setInterval(this._maybeUpgrade.bind(this), 10000);
 
         return true;
     }
@@ -238,10 +240,20 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Disconnect from the RTEnnui server.
      */
     disconnect() {
-        if (this._serverReliable)
+        if (this._serverReliable) {
             this._serverReliable.close();
-        if (this._serverUnreliable)
+            this._serverReliable = null;
+        }
+        if (this._serverUnreliable) {
             this._serverUnreliable.close();
+            this._serverUnreliable = null;
+        }
+        if (this._upgradeTimer)
+            clearTimeout(this._upgradeTimer);
+        for (const track of this._videoTracks)
+            track.close();
+        for (const track of  this._audioTracks)
+            track.close();
     }
 
     /**
@@ -912,6 +924,17 @@ export class Connection extends abstractRoom.AbstractRoom {
         stream.close();
     }
 
+    /**
+     * Perform any possible upgrades *if* no peer is reporting drops.
+     * @private
+     */
+    private _maybeUpgrade() {
+        for (const peer of this._peers)
+            if (peer && peer.outgoingDrops)
+                return;
+        this._grade(2);
+    }
+
     override _grade(by: number) {
         if (!this._videoTracks.length)
             return false;
@@ -997,4 +1020,9 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Formats that the server accepts.
      */
     private _formats: string[];
+
+    /**
+     * An interval for considering upgrading any degraded streams.
+     */
+    private _upgradeTimer: number | null;
 }
