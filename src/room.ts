@@ -15,9 +15,9 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+import * as weasound from "weasound";
+
 import * as abstractRoom from "./abstract-room";
-import * as audioCapture from "./audio-capture";
-import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as outgoingVideoStream from "./outgoing-video-stream";
@@ -85,7 +85,7 @@ export class Connection extends abstractRoom.AbstractRoom {
              * one. Allowed to return null.
              */
             createAudioPlayback?:
-                (ac: AudioContext) => Promise<audioPlayback.AudioPlayback>
+                (ac: AudioContext) => Promise<weasound.AudioPlayback>
         } = {}
     ) {
         super();
@@ -586,7 +586,7 @@ export class Connection extends abstractRoom.AbstractRoom {
      * @param opts  Outgoing stream options.
      */
     async addAudioTrack(
-        track: audioCapture.AudioCapture,
+        track: weasound.AudioCapture,
         opts: outgoingAudioStream.OutgoingAudioStreamOptions = {}
     ) {
         const stream = new outgoingAudioStream.OutgoingAudioStream(track);
@@ -601,7 +601,7 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Remove an outgoing audio track.
      * @param track  Track to remove.
      */
-    async removeAudioTrack(track: audioCapture.AudioCapture) {
+    async removeAudioTrack(track: weasound.AudioCapture) {
         // Find the stream
         let idx: number;
         let stream: outgoingAudioStream.OutgoingAudioStream;

@@ -15,9 +15,9 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+import * as weasound from "weasound";
+
 import * as abstractRoom from "./abstract-room";
-import * as audioBidir from "./audio-bidir";
-import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
@@ -711,11 +711,11 @@ export class Peer {
                     if (!env) continue;
 
                     // Set up the player
-                    let player: audioPlayback.AudioPlayback = null;
+                    let player: weasound.AudioPlayback = null;
                     if (opts.createAudioPlayback)
                         player = await opts.createAudioPlayback(ac);
                     if (!player)
-                        player = await audioBidir.createAudioPlayback(ac);
+                        player = await weasound.createAudioPlayback(ac);
                     track.player = player;
 
                     this.room.emitEvent("track-started-audio", {
@@ -1603,7 +1603,7 @@ class Track {
      * Player for this track.
      * @private
      */
-    player: audioPlayback.AudioPlayback | videoPlayback.VideoPlayback;
+    player: weasound.AudioPlayback | videoPlayback.VideoPlayback;
 }
 
 /**

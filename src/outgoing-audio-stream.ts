@@ -15,7 +15,8 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-import * as audioCapture from "./audio-capture";
+import * as weasound from "weasound";
+
 import * as events from "./events";
 
 import type * as wcp from "libavjs-webcodecs-polyfill";
@@ -42,7 +43,7 @@ export interface OutgoingAudioStreamOptions {
  */
 export class OutgoingAudioStream extends events.EventEmitter {
     constructor(
-        public capture: audioCapture.AudioCapture
+        public capture: weasound.AudioCapture
     ) {
         super();
         this._sampleRate = capture.getSampleRate();

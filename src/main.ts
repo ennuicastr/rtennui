@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021, 2022 Yahweasel
+ * Copyright (c) 2021-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,9 +15,8 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-import * as audioBidir from "./audio-bidir";
-import * as audioCapture from "./audio-capture";
-import * as audioPlayback from "./audio-playback";
+import * as weasound from "weasound";
+
 import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as peer from "./peer";
@@ -30,17 +29,18 @@ export async function load() {
     await peer.load();
 }
 
-export type AudioCapture = audioCapture.AudioCapture;
-export const AudioCapture = audioCapture.AudioCapture;
-export type AudioCaptureOptions = audioCapture.AudioCaptureOptions;
-export const createAudioCapture = audioBidir.createAudioCapture;
+// For historical reasons, we re-export Weasound's functionality
+export type AudioCapture = weasound.AudioCapture;
+export const AudioCapture = weasound.AudioCapture;
+export type AudioCaptureOptions = weasound.AudioCaptureOptions;
+export const createAudioCapture = weasound.createAudioCapture;
 
-export type AudioPlayback = audioPlayback.AudioPlayback;
-export const AudioPlayback = audioPlayback.AudioPlayback;
-export type AudioPlaybackOptions = audioPlayback.AudioPlaybackOptions;
-export const createAudioPlayback = audioBidir.createAudioPlayback;
+export type AudioPlayback = weasound.AudioPlayback;
+export const AudioPlayback = weasound.AudioPlayback;
+export type AudioPlaybackOptions = weasound.AudioPlaybackOptions;
+export const createAudioPlayback = weasound.createAudioPlayback;
 
-export const audioCapturePlaybackShared = audioBidir.audioCapturePlaybackShared;
+export const audioCapturePlaybackShared = weasound.audioCapturePlaybackShared;
 
 export type Reliability = net.Reliability;
 export const Reliability = net.Reliability;
