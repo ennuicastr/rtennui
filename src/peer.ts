@@ -92,6 +92,7 @@ export class Peer {
         this.outgoingDropsTimeout = null;
 
         this.tracks = null;
+        this.audioLatency = 0;
         this.rtc = null;
         this.rtcMakingOffer = false;
         this.rtcIgnoreOffer = false;
@@ -636,6 +637,7 @@ export class Peer {
             });
 
             // Initialize the metadata
+            let firstAudioTrack = true;
             for (let i = 0; i < tracks.length; i++) {
                 const trackInfo = info[i];
                 const track = tracks[i];
@@ -750,6 +752,9 @@ export class Peer {
                     );
                     track.framePtr = await resampler.av_frame_alloc();
 
+                    track.firstAudioTrack = firstAudioTrack;
+                    firstAudioTrack = false;
+
                 }
 
             }
@@ -757,6 +762,7 @@ export class Peer {
             this.streamId = id;
             this.stream = info;
             this.tracks = tracks;
+            this.audioLatency = 0;
         }).catch(console.error);
 
         await this.promise;
@@ -1308,13 +1314,34 @@ export class Peer {
                     // No associated track, or track not yet configured
 
                 } else if (track.video) {
-                    (<videoPlayback.VideoPlayback> track.player)
-                        .display(<wcp.VideoFrame> chunk.decoded)
-                        .then(() => chunk.close());
+                    // Delay display by the audio latency to keep them in sync
+                    if (this.audioLatency) {
+                        await new Promise(
+                            res => setTimeout(res, this.audioLatency));
+                    }
+
+                    await (<videoPlayback.VideoPlayback> track.player)
+                        .display(<wcp.VideoFrame> chunk.decoded);
+
+                    chunk.close();
 
                 } else {
-                    (<audioPlayback.AudioPlayback> track.player)
-                        .play(<Float32Array[]> chunk.decoded);
+                    let latency =
+                        (<weasound.AudioPlayback> track.player)
+                            .play(<Float32Array[]> chunk.decoded);
+
+                    // Only use the latency data from the first audio track
+                    if (track.firstAudioTrack) {
+                        if (latency > 250)
+                            latency = 250;
+                        if (latency > this.audioLatency) {
+                            this.audioLatency = latency;
+                        } else {
+                            this.audioLatency =
+                                (this.audioLatency * 63 / 64) +
+                                (latency / 64);
+                        }
+                    }
 
                 }
             })();
@@ -1477,6 +1504,12 @@ export class Peer {
     tracks: Track[];
 
     /**
+     * The (current) latency in playing audio data. Used to delay video
+     * display.
+     */
+    audioLatency: number;
+
+    /**
      * The RTC connection to this peer.
      * @private
      */
@@ -1562,6 +1595,7 @@ export class Peer {
 class Track {
     constructor() {
         this.video = false;
+        this.firstAudioTrack = false;
         this.duration = 0;
         this.decoder = null;
         this.resampler = null;
@@ -1574,6 +1608,13 @@ class Track {
      * @private
      */
     video: boolean;
+
+    /**
+     * Is this the *first* audio track? (We care because the first audio track
+     * is used to measure audio latency)
+     * @private
+     */
+    firstAudioTrack: boolean;
 
     /**
      * The duration of data that we have for this track.
