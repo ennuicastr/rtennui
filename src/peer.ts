@@ -1332,8 +1332,8 @@ export class Peer {
 
                     // Only use the latency data from the first audio track
                     if (track.firstAudioTrack) {
-                        if (latency > 250)
-                            latency = 250;
+                        if (latency > 500)
+                            latency = 500;
                         if (latency > this.audioLatency) {
                             this.audioLatency = latency;
                         } else {
