@@ -781,6 +781,8 @@ export class Peer {
 
             for (let i = 0; i < this.tracks.length; i++) {
                 const track = this.tracks[i];
+                if (!track)
+                    continue;
 
                 if (track.player) {
                     const player = track.player;
