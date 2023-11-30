@@ -651,9 +651,15 @@ export class Connection extends abstractRoom.AbstractRoom {
 
             // Replace the codec
             inVT.close();
-            this._videoTracks[i] = new outgoingVideoStream.OutgoingVideoStream(
-                inVT.ms, vCodec
-            );
+            const stream =
+                new outgoingVideoStream.OutgoingVideoStream(
+                    inVT.ms, vCodec
+                );
+            await stream.init();
+            this._videoTracks[i] = stream;
+            this._videoTrackKeyframes[i] = 0;
+            stream.on("data", data => this._onOutgoingData(stream, data));
+            stream.on("error", error => this._onOutgoingError(stream, error));
         }
 
         // FIXME: If we ever support multiple audio codecs, replace those too
