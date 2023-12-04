@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021, 2022 Yahweasel
+ * Copyright (c) 2021-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,9 +15,9 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+import * as weasound from "weasound";
+
 import * as abstractRoom from "./abstract-room";
-import * as audioCapture from "./audio-capture";
-import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as outgoingVideoStream from "./outgoing-video-stream";
@@ -25,6 +25,7 @@ import * as peer from "./peer";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
 import * as videoCapture from "./video-capture";
+import * as videoPlayback from "./video-playback";
 
 import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
@@ -84,12 +85,13 @@ export class Connection extends abstractRoom.AbstractRoom {
              * one. Allowed to return null.
              */
             createAudioPlayback?:
-                (ac: AudioContext) => Promise<audioPlayback.AudioPlayback>
+                (ac: AudioContext) => Promise<weasound.AudioPlayback>
         } = {}
     ) {
         super();
         this._streamId = 0;
         this._videoTracks = [];
+        this._videoTrackKeyframes = [];
         this._audioTracks = [];
         this._serverReliable = null;
         this._serverUnreliable = null;
@@ -97,6 +99,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._serverReliability = net.Reliability.RELIABLE;
         this._serverReliabilityProber = null;
         this._peers = [];
+        this._upgradeTimer = null;
     }
 
     /**
@@ -123,40 +126,11 @@ export class Connection extends abstractRoom.AbstractRoom {
             let enc = [];
             let dec = [];
 
-            for (const codec of ["no.vp09.0.51.8", "vp8"]) {
-                try {
-                    await LibAVWebCodecs.getVideoDecoder({codec});
-                    dec.push("v" + codec);
-                    await LibAVWebCodecs.getVideoEncoder({
-                        codec,
-                        width: 640, height: 480
-                    });
-                    enc.push("v" + codec);
-                } catch (ex) {}
-            }
+            for (const codec of await videoCapture.codecSupportList())
+                enc.push("v" + codec);
 
-            // H.263+ is special because it's not in the codec registry
-            try {
-                await LibAVWebCodecs.getVideoDecoder({
-                    codec: {libavjs:{
-                        codec: "h263p"
-                    }}
-                });
-                dec.push("vh263.2");
-                await LibAVWebCodecs.getVideoEncoder({
-                    codec: {libavjs:{
-                        codec: "h263p",
-                        ctx: {
-                            pix_fmt: 0,
-                            width: 640,
-                            height: 480
-                        }
-                    }},
-                    width: 640,
-                    height: 480
-                });
-                enc.push("vh263.2");
-            } catch (ex) {}
+            for (const codec of await videoPlayback.codecSupportList())
+                dec.push("v" + codec);
 
             /* We don't use native WebCodecs for audio, so our support is
              * always the same */
@@ -257,6 +231,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this.emitEvent("connected", null);
 
         this._connectUnreliable();
+        this._upgradeTimer = setInterval(this._maybeUpgrade.bind(this), 10000);
 
         return true;
     }
@@ -265,10 +240,20 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Disconnect from the RTEnnui server.
      */
     disconnect() {
-        if (this._serverReliable)
+        if (this._serverReliable) {
             this._serverReliable.close();
-        if (this._serverUnreliable)
+            this._serverReliable = null;
+        }
+        if (this._serverUnreliable) {
             this._serverUnreliable.close();
+            this._serverUnreliable = null;
+        }
+        if (this._upgradeTimer)
+            clearTimeout(this._upgradeTimer);
+        for (const track of this._videoTracks)
+            track.close();
+        for (const track of  this._audioTracks)
+            track.close();
     }
 
     /**
@@ -442,6 +427,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                     util.decodeText(
                         (new Uint8Array(msg.buffer)).subarray(p.data));
                 this._formats = JSON.parse(formatsJSON);
+                this._formatsUpdated();
                 break;
             }
 
@@ -533,26 +519,37 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     /**
-     * Add an outgoing video track.
-     * @param track  Track to add.
+     * Choose a video codec.
      */
-    async addVideoTrack(track: videoCapture.VideoCapture) {
-        const stream = new outgoingVideoStream.OutgoingVideoStream(track);
-
-        // Choose a format
-        let format: string = null;
+    private _chooseVideoCodec(): string {
+        let codec: string = null;
         for (const opt of encoders) {
+            if (opt[0] !== "v")
+                continue;
             if (!this._formats || this._formats.indexOf(opt) >= 0) {
-                format = opt;
+                codec = opt;
                 break;
             }
         }
-        if (!format)
-            throw new Error("No supported video format found!");
+        if (!codec)
+            throw new Error("No supported video codec found!");
+        return codec;
+    }
 
-        // Initialize the stream
-        await stream.init(format);
+    /**
+     * Add an outgoing video track.
+     * @param ms  Stream to add.
+     */
+    async addVideoTrack(ms: MediaStream) {
+        // Choose a codec
+        const codec = this._chooseVideoCodec();
+
+        const stream = new outgoingVideoStream.OutgoingVideoStream(ms, codec);
+
+        // Set up the stream
+        await stream.init();
         this._videoTracks.push(stream);
+        this._videoTrackKeyframes.push(0);
         stream.on("data", data => this._onOutgoingData(stream, data));
         stream.on("error", error => this._onOutgoingError(stream, error));
         this._newOutgoingStream();
@@ -560,15 +557,15 @@ export class Connection extends abstractRoom.AbstractRoom {
 
     /**
      * Remove an outgoing video track.
-     * @param track  Track to remove.
+     * @param ms  Stream to remove.
      */
-    async removeVideoTrack(track: videoCapture.VideoCapture) {
+    async removeVideoTrack(ms: MediaStream) {
         // Find the stream
         let idx: number;
         let stream: outgoingVideoStream.OutgoingVideoStream;
         for (idx = 0; idx < this._videoTracks.length; idx++) {
             let str = this._videoTracks[idx];
-            if (str.capture === track) {
+            if (str.ms === ms) {
                 stream = str;
                 break;
             }
@@ -579,6 +576,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Stop and remove it
         stream.close();
         this._videoTracks.splice(idx, 1);
+        this._videoTrackKeyframes.splice(idx, 1);
         this._newOutgoingStream();
     }
 
@@ -588,7 +586,7 @@ export class Connection extends abstractRoom.AbstractRoom {
      * @param opts  Outgoing stream options.
      */
     async addAudioTrack(
-        track: audioCapture.AudioCapture,
+        track: weasound.AudioCapture,
         opts: outgoingAudioStream.OutgoingAudioStreamOptions = {}
     ) {
         const stream = new outgoingAudioStream.OutgoingAudioStream(track);
@@ -603,7 +601,7 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Remove an outgoing audio track.
      * @param track  Track to remove.
      */
-    async removeAudioTrack(track: audioCapture.AudioCapture) {
+    async removeAudioTrack(track: weasound.AudioCapture) {
         // Find the stream
         let idx: number;
         let stream: outgoingAudioStream.OutgoingAudioStream;
@@ -620,6 +618,52 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Stop and remove it
         stream.close();
         this._audioTracks.splice(idx, 1);
+        this._newOutgoingStream();
+    }
+
+    /**
+     * Called when the formats list is updated to reinitialize any streams that
+     * need to be done in a different format.
+     */
+    private async _formatsUpdated() {
+        const fromFormats =
+            this._videoTracks.map(x => "v" + x.getCodec())
+            .concat(this._audioTracks.map(x => "aopus"))
+            .join(",");
+
+        // Find new formats for each track
+        const vCodec = this._chooseVideoCodec();
+        const toFormats =
+            Array(this._videoTracks.length).fill(vCodec)
+            .concat(Array(this._audioTracks.length).fill("aopus"))
+            .join(",");
+
+        if (fromFormats === toFormats) {
+            // No change needed
+            return;
+        }
+
+        // Replace tracks!
+        for (let i = 0; i < this._videoTracks.length; i++) {
+            const inVT = this._videoTracks[i];
+            if (inVT.getCodec() === vCodec)
+                continue;
+
+            // Replace the codec
+            inVT.close();
+            const stream =
+                new outgoingVideoStream.OutgoingVideoStream(
+                    inVT.ms, vCodec
+                );
+            await stream.init();
+            this._videoTracks[i] = stream;
+            this._videoTrackKeyframes[i] = 0;
+            stream.on("data", data => this._onOutgoingData(stream, data));
+            stream.on("error", error => this._onOutgoingError(stream, error));
+        }
+
+        // FIXME: If we ever support multiple audio codecs, replace those too
+
         this._newOutgoingStream();
     }
 
@@ -741,8 +785,10 @@ export class Connection extends abstractRoom.AbstractRoom {
         // Get our track listing
         const tracks = []
             .concat(this._videoTracks.map(x => ({
-                codec: x.format,
-                frameDuration: ~~(1000000 / x.capture.getFramerate())
+                codec: x.getCodec(),
+                frameDuration: ~~(1000000 / x.getFramerate()),
+                width: x.getWidth(),
+                height: x.getHeight()
             })))
             .concat(this._audioTracks.map(x => ({
                 codec: "aopus",
@@ -796,13 +842,28 @@ export class Connection extends abstractRoom.AbstractRoom {
             (this._streamId << 4) |
             trackIdx;
 
+        // Keyframe index
+        let gopIdx = 0;
+        if (isVideo) {
+            if (key)
+                this._videoTrackKeyframes[trackIdx] = packetIdx;
+            else
+                gopIdx = packetIdx - this._videoTrackKeyframes[trackIdx];
+        }
+
+        // Give it a timestamp
+        const timestamp = performance.now();
+        const tsBytes = util.netIntBytes(timestamp);
+
         // Get the data out
-        const datau8 = new Uint8Array(data.byteLength);
-        data.copyTo(datau8);
+        const datau8 = new Uint8Array(tsBytes + data.byteLength);
+        util.encodeNetInt(datau8, 0, timestamp);
+        data.copyTo(datau8.subarray(tsBytes));
 
         // Make and send the messages
         const p = prot.parts.data;
         const packetIdxBytes = util.netIntBytes(packetIdx);
+        const gopIdxBytes = util.netIntBytes(gopIdx);
         let idx = 0;
         const ct = Math.ceil(datau8.length / perPacket);
         const ctBytes = util.netIntBytes(ct);
@@ -811,15 +872,17 @@ export class Connection extends abstractRoom.AbstractRoom {
             const idxBytes = util.netIntBytes(idx);
 
             const msg = net.createPacket(
-                p.length + packetIdxBytes + idxBytes + ctBytes +
+                p.length + packetIdxBytes + gopIdxBytes + idxBytes + ctBytes +
                 dataPart.length,
                 this._id, prot.ids.data,
                 [
                     [p.info, 1, info],
                     [p.data, 0, packetIdx],
-                    [p.data + packetIdxBytes, 0, idx],
-                    [p.data + packetIdxBytes + idxBytes, 0, ct],
-                    [p.data + packetIdxBytes + idxBytes + ctBytes, dataPart],
+                    [p.data + packetIdxBytes, 0, gopIdx],
+                    [p.data + packetIdxBytes + gopIdxBytes, 0, idx],
+                    [p.data + packetIdxBytes + gopIdxBytes + idxBytes, 0, ct],
+                    [p.data + packetIdxBytes + gopIdxBytes + idxBytes + ctBytes,
+                     dataPart],
                 ]
             );
 
@@ -867,6 +930,29 @@ export class Connection extends abstractRoom.AbstractRoom {
         stream.close();
     }
 
+    /**
+     * Perform any possible upgrades *if* no peer is reporting drops.
+     * @private
+     */
+    private _maybeUpgrade() {
+        for (const peer of this._peers)
+            if (peer && peer.outgoingDrops)
+                return;
+        this._grade(2);
+    }
+
+    override _grade(by: number) {
+        if (!this._videoTracks.length)
+            return false;
+
+        let ret = false;
+        for (const track of this._videoTracks) {
+            if (track.grade(by))
+                ret = true;
+        }
+        return ret;
+    }
+
     // AbstractRoom methods
     /** @private */
     override _getOwnId() { return this._id; }
@@ -895,6 +981,11 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Our video tracks.
      */
     private _videoTracks: outgoingVideoStream.OutgoingVideoStream[];
+
+    /**
+     * The index of the last keyframe from each video track.
+     */
+    private _videoTrackKeyframes: number[];
 
     /**
      * Our audio tracks.
@@ -935,4 +1026,9 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Formats that the server accepts.
      */
     private _formats: string[];
+
+    /**
+     * An interval for considering upgrading any degraded streams.
+     */
+    private _upgradeTimer: number | null;
 }

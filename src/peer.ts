@@ -15,9 +15,9 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+import * as weasound from "weasound";
+
 import * as abstractRoom from "./abstract-room";
-import * as audioBidir from "./audio-bidir";
-import * as audioPlayback from "./audio-playback";
 import * as net from "./net";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
@@ -27,6 +27,16 @@ import type * as libavT from "libav.js";
 declare let LibAV: libavT.LibAVWrapper;
 import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
+
+/**
+ * Timeout between checking for high drop rate.
+ */
+const dropTimeout = 2000;
+
+/**
+ * Timeout before forgetting about high drop rate.
+ */
+const dropForgetTimeout = 5000;
 
 /**
  * A single libav instance used to resample.
@@ -77,7 +87,12 @@ export class Peer {
         this.drops = 0;
         this.dropInfoTimeout = null;
 
+        // And remember if they've told us we have a high drop rate
+        this.outgoingDrops = false;
+        this.outgoingDropsTimeout = null;
+
         this.tracks = null;
+        this.audioLatency = 0;
         this.rtc = null;
         this.rtcMakingOffer = false;
         this.rtcIgnoreOffer = false;
@@ -86,7 +101,8 @@ export class Peer {
         this.reliability = net.Reliability.SEMIRELIABLE;
         this.pingInterval = null;
         this.pongs = [];
-        this._idealBufferMs = 0;
+        this._idealBufferFromPingMs = 0;
+        this._idealBufferFromDataMs = 0;
         this._incomingReliable = 0;
     }
 
@@ -526,7 +542,7 @@ export class Peer {
             pongs.shift();
 
         // Calculate the buffer size
-        this._idealBufferMs = Math.min(
+        this._idealBufferFromPingMs = Math.min(
             250, // No more than 250ms buffer
             Math.max(
                 10, // No less than 10ms buffer
@@ -544,18 +560,20 @@ export class Peer {
 
         if (this.reliable && this._incomingReliable &&
             this.pongs.length >= idealPings) {
+            const buffer = this.idealBufferMs() * 1.5;
+
             // Inform the user
             this.room.emitEvent("peer-p2p-latency", {
                 peer: this.id,
                 network: Math.round(pongs[pongs.length-1]),
-                buffer: Math.round(this._idealBufferMs * 1.5),
+                buffer: buffer,
                 playback: 50, // Just a guess
                 total: Math.round(
                     // The actual network latency...
                     pongs[pongs.length-1] +
 
                     // Our buffer
-                    this._idealBufferMs * 1.5 +
+                    buffer +
 
                     // The playback delay (final buffer)
                     50
@@ -571,24 +589,26 @@ export class Peer {
      * @private
      */
     idealBufferMs() {
+        // Ideal buffer from pings...
+        let idealBufferFromPingMs = this._idealBufferFromPingMs;
         if (
             this.reliability < net.Reliability.SEMIRELIABLE ||
             !this.reliable || !this._incomingReliable ||
             this.pongs.length < idealPings
         ) {
             // No reliable connection, so use the default
-            return 100;
+            idealBufferFromPingMs = 100;
         }
 
-        let min = 0;
-
         // No less than two frames
+        let minFromFrames = 0;
         if (this.stream) {
-            min = Math.max.apply(Math, this.stream.map(
+            minFromFrames = Math.max.apply(Math, this.stream.map(
                 x => x.frameDuration * 2 / 1000));
         }
 
-        const ideal = Math.max(this._idealBufferMs, min);
+        const ideal = Math.max(
+            idealBufferFromPingMs, this._idealBufferFromDataMs, minFromFrames);
 
         return ideal;
     }
@@ -617,6 +637,7 @@ export class Peer {
             });
 
             // Initialize the metadata
+            let firstAudioTrack = true;
             for (let i = 0; i < tracks.length; i++) {
                 const trackInfo = info[i];
                 const track = tracks[i];
@@ -626,27 +647,37 @@ export class Peer {
                     track.video = true;
 
                     // Figure out the codec
-                    let codec: any;
-                    if (trackInfo.codec === "vh263.2") {
-                        codec = {libavjs:{
-                            codec: "h263p"
-                        }};
-                    } else {
-                        codec = trackInfo.codec.slice(1);
+                    let codec = trackInfo.codec.slice(1);
+                    let wcCodec = codec;
+                    if (codec === "vp8lo") {
+                        /* vp8lo is an internal name for "VP8, but be gentle,
+                         * because there will be software decoders" */
+                        wcCodec = "vp8";
                     }
 
-                    // Find an environment
+                    // Find a decoding environment
                     const config: wcp.VideoDecoderConfig = {
-                        codec
+                        codec: wcCodec
                     };
                     let env: wcp.VideoDecoderEnvironment = null;
                     try {
                         env = await LibAVWebCodecs.getVideoDecoder(config);
                     } catch (ex) {}
-                    if (!env) continue;
 
                     const player = track.player =
-                        await videoPlayback.createVideoPlayback();
+                        await videoPlayback.createVideoPlayback(
+                            codec,
+                            trackInfo.width || 640, trackInfo.height || 360
+                        );
+
+                    if (!player) {
+                        tracks[i] = null;
+                        continue;
+                    } else if (!player.selfDecoding() && !env) {
+                        player.close();
+                        tracks[i] = null;
+                        continue;
+                    }
 
                     this.room.emitEvent("track-started-video", {
                         peer: this.id,
@@ -655,15 +686,18 @@ export class Peer {
                     });
 
                     // Set up the decoder
-                    const dec = track.decoder = new Decoder();
-                    dec.envV = env;
-                    dec.config = config;
-                    await dec.init();
+                    if (env) {
+                        const dec = track.decoder = new Decoder();
+                        dec.envV = env;
+                        dec.config = config;
+                        await dec.init();
+                    }
 
                 } else if (trackInfo.codec[0] === "a") {
                     // Audio track
                     if (trackInfo.codec !== "aopus") {
                         // Unsupported
+                        tracks[i] = null;
                         continue;
                     }
 
@@ -679,11 +713,11 @@ export class Peer {
                     if (!env) continue;
 
                     // Set up the player
-                    let player: audioPlayback.AudioPlayback = null;
+                    let player: weasound.AudioPlayback = null;
                     if (opts.createAudioPlayback)
                         player = await opts.createAudioPlayback(ac);
                     if (!player)
-                        player = await audioBidir.createAudioPlayback(ac);
+                        player = await weasound.createAudioPlayback(ac);
                     track.player = player;
 
                     this.room.emitEvent("track-started-audio", {
@@ -718,6 +752,9 @@ export class Peer {
                     );
                     track.framePtr = await resampler.av_frame_alloc();
 
+                    track.firstAudioTrack = firstAudioTrack;
+                    firstAudioTrack = false;
+
                 }
 
             }
@@ -725,6 +762,7 @@ export class Peer {
             this.streamId = id;
             this.stream = info;
             this.tracks = tracks;
+            this.audioLatency = 0;
         }).catch(console.error);
 
         await this.promise;
@@ -743,6 +781,8 @@ export class Peer {
 
             for (let i = 0; i < this.tracks.length; i++) {
                 const track = this.tracks[i];
+                if (!track)
+                    continue;
 
                 if (track.player) {
                     const player = track.player;
@@ -798,9 +838,21 @@ export class Peer {
             // c is the "command" (tho these are generally not command-like)
             switch (info.c) {
                 case "dropRate":
-                    /* Our drop rate (to this peer) is high. Either reconnect
-                     * with more retransmits, or abort the P2P connection
-                     * entirely and proxy via the server. */
+                    // Our drop rate to this peer is high. Mark it.
+                    this.outgoingDrops = true;
+                    if (this.outgoingDropsTimeout)
+                        clearTimeout(this.outgoingDropsTimeout);
+                    this.outgoingDropsTimeout = setTimeout(() => {
+                        this.outgoingDrops = false;
+                    }, dropForgetTimeout);
+
+                    // Possibly just degrade for now
+                    if (this.room._grade(0.5))
+                        break;
+
+                    /* Couldn't degrade. Either reconnect with more
+                     * retransmits, or abort the P2P connection entirely and
+                     * proxy via the server. */
                     switch (this.reliability) {
                         case net.Reliability.RELIABLE:
                             // Use a semi-reliable connection
@@ -848,6 +900,7 @@ export class Peer {
             const datau8 = new Uint8Array(data.buffer);
             const offset = {offset: p.data};
             const packetIdx = util.decodeNetInt(datau8, offset);
+            const gopIdx = packetIdx - util.decodeNetInt(datau8, offset);
 
             if (this.data.length === 0)
                 this.offset = packetIdx;
@@ -860,24 +913,80 @@ export class Peer {
             while (this.data.length <= idxOffset)
                 this.data.push(null);
 
+            const gopIdxOffset = gopIdx - this.offset;
+            if (gopIdxOffset !== idxOffset &&
+                gopIdxOffset >= 0 && gopIdxOffset < this.data.length) {
+                /* Make sure we know this packet is a keyframe so we don't skip
+                 * it */
+                if (!this.data[gopIdxOffset]) {
+                    this.data[gopIdxOffset] =
+                        new IncomingData(trackIdx, gopIdx, true);
+                    this.tracks[trackIdx].duration +=
+                        this.stream[trackIdx].frameDuration;
+                }
+            }
+
             const partIdx = util.decodeNetInt(datau8, offset);
             const partCt = util.decodeNetInt(datau8, offset);
+
+            let timestamp = -1;
+            if (partIdx === 0)
+                timestamp = util.decodeNetInt(datau8, offset);
 
             // Make the surrounding structure
             let idata: IncomingData = this.data[idxOffset];
             if (!idata) {
                 idata = this.data[idxOffset] =
-                    new IncomingData(trackIdx, packetIdx, key, partCt);
+                    new IncomingData(trackIdx, packetIdx, key);
                 this.tracks[trackIdx].duration +=
                     this.stream[trackIdx].frameDuration;
             }
+            if (!idata.encoded)
+                idata.encoded = Array(partCt).fill(null);
             if (partCt !== idata.encoded.length) {
                 // ??? Inconsistent data!
                 return;
             }
             idata.encoded[partIdx] = datau8.slice(offset.offset);
+            if (partIdx === 0)
+                idata.remoteTimestamp = timestamp;
+            idata.arrivedTimestamp = performance.now();
 
         } catch (ex) {}
+
+        // Compute our ideal buffer from the data we now have
+        {
+            let diffs: number[] = [];
+            for (const idata of this.data) {
+                if (!idata || idata.remoteTimestamp < 0 ||
+                    idata.arrivedTimestamp < 0)
+                    continue;
+                diffs.push(idata.arrivedTimestamp - idata.remoteTimestamp);
+            }
+
+            let idealBuffer = 0;
+            if (diffs.length) {
+                diffs.sort();
+
+                /* The buffer comes from the *range* of possible times it might
+                 * take to receive data. */
+                idealBuffer =
+                    (diffs[diffs.length-1] - diffs[0]);
+            } else {
+                this._idealBufferFromDataMs = 0;
+            }
+
+            /* The value we get raw is a snapshot, and doesn't include any data
+             * we've already gone past, so if it's lower than the current
+             * value, weight it heavily. */
+            if (idealBuffer > this._idealBufferFromDataMs) {
+                this._idealBufferFromDataMs = idealBuffer;
+            } else {
+                this._idealBufferFromDataMs =
+                    (this._idealBufferFromDataMs * 255/256) +
+                    (idealBuffer / 256);
+            }
+        }
 
         // Decode what we can
         this.decodeMany();
@@ -894,7 +1003,7 @@ export class Peer {
     decodeMany() {
         for (const packet of this.data) {
             // If we don't have this packet, we can't decode past it
-            if (!packet)
+            if (!packet || !packet.encoded)
                 break;
 
             // If this packet is incomplete, we can't decode it or past it
@@ -927,6 +1036,20 @@ export class Peer {
         force?: boolean
     } = {}) {
         const track = this.tracks[packet.trackIdx];
+
+        /* If it's a video track with a player that self-decodes, we can just
+         * transfer the data directly. */
+        if (!track.decoder && track.video &&
+            (<videoPlayback.VideoPlayback> track.player).selfDecoding()) {
+            packet.decoded = new LibAVWebCodecs.EncodedVideoChunk({
+                data: unify(),
+                type: packet.key ? "key" : "delta",
+                timestamp: 0
+            });
+            packet.decoding = true;
+            packet.decodingRes();
+            return;
+        }
 
         // Get (but don't overload) the decoder
         const decoder = track.decoder;
@@ -969,13 +1092,6 @@ export class Peer {
         if (track.video) {
             if (decoder.keyChunkRequired && !packet.key) {
                 // Not decodable
-                packet.decoded = new decoder.envV.VideoFrame(
-                    new Uint8Array(640 * 360 * 4), {
-                    format: <any> "RGBA",
-                    codedWidth: 640,
-                    codedHeight: 360,
-                    timestamp: 0
-                });
                 packet.decodingRes();
                 return;
 
@@ -1062,9 +1178,10 @@ export class Peer {
 
     /**
      * Get the next packet of data.
+     * @param force  Shift even if that means skipping a keyframe.
      * @private
      */
-    shift() {
+    shift(force = false) {
         while (this.data.length > 1) {
             const next: IncomingData = this.data[0];
             if (!next) {
@@ -1077,27 +1194,31 @@ export class Peer {
 
             // next is set, but might be incomplete
             let complete = true;
-            for (const part of next.encoded) {
-                if (!part) {
-                    complete = false;
-                    break;
+            if (next.encoded) {
+                for (const part of next.encoded) {
+                    if (!part) {
+                        complete = false;
+                        break;
+                    }
                 }
+            } else {
+                complete = false;
             }
 
-            /*
-            if (!complete && next.key) {
+            if (!complete && next.key && !force) {
                 // Can't skip keyframes
                 return null;
             }
-            */
 
             // We're either displaying it or skipping it, so shift it
             this.data.shift();
             this.offset++;
             this.logDrop(false);
             const track = this.tracks[next.trackIdx];
-            track.duration -=
-                this.stream[next.trackIdx].frameDuration;
+            if (track) {
+                track.duration -=
+                    this.stream[next.trackIdx].frameDuration;
+            }
 
             if (!complete)
                 continue;
@@ -1114,8 +1235,8 @@ export class Peer {
      * @private
      */
     async play() {
-        /* Set the ideal start time on the first packet to the ideal buffering
-         * time */
+        /* Set the ideal start time on the first packet to give some time to
+         * buffer */
         for (const chunk of this.data) {
             if (!chunk)
                 continue;
@@ -1132,12 +1253,23 @@ export class Peer {
                 break;
             }
 
-            /* Do we have too much data (more than double our ideal buffer),
-             * and more than 250ms? */
+            /* Do we have *way* too much data (more than 500ms)? */
+            while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
+                   >= 500000) {
+                const chunk = this.shift(true);
+                if (chunk)
+                    chunk.close();
+            }
+
+            /* Do we have too much data (more than double our ideal buffer, and
+             * more than 250ms)? */
             const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
-            while (Math.max.apply(Math, this.tracks.map(x => x.duration))
+            while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= tooMuch) {
-                if (!this.shift())
+                const chunk = this.shift();
+                if (chunk)
+                    chunk.close();
+                else
                     break;
             }
 
@@ -1154,48 +1286,82 @@ export class Peer {
             if (!chunk.decoding)
                 this.decodeOne(chunk, {force: true});
 
-            if (chunk.idealTimestamp < 0) {
-                chunk.idealTimestamp = performance.now();
-            } else {
+            // If we blew the deadline, make a new deadline
+            const now = performance.now();
+            chunk.idealTimestamp = Math.max(chunk.idealTimestamp, now);
+
+            {
                 // Wait until we're actually supposed to be playing this chunk
-                const wait = chunk.idealTimestamp - performance.now();
-                if (wait > 0)
-                    await new Promise(res => setTimeout(res, wait));
+                const wait = chunk.idealTimestamp - now;
+                if (wait > 2)
+                    await new Promise(res => setTimeout(res, wait - 2));
             }
 
             // Decode and present it in the background
             (async () => {
                 // Make sure it's decoded
                 await chunk.decodingPromise;
-                if (!chunk.decoded)
+                if (!chunk.decoded) {
+                    chunk.close();
                     return;
+                }
 
                 // And play it
-                if (!this.tracks)
+                if (!this.tracks) {
+                    chunk.close();
                     return;
+                }
                 const track = this.tracks[chunk.trackIdx];
                 if (!track) {
                     // No associated track, or track not yet configured
 
                 } else if (track.video) {
-                    const frame = <wcp.VideoFrame> chunk.decoded;
-                    (<videoPlayback.VideoPlayback> track.player)
-                        .display(frame)
-                        .then(() => frame.close());
+                    // Delay display by the audio latency to keep them in sync
+                    if (this.audioLatency) {
+                        await new Promise(
+                            res => setTimeout(res, this.audioLatency));
+                    }
+
+                    await (<videoPlayback.VideoPlayback> track.player)
+                        .display(<wcp.VideoFrame> chunk.decoded);
+
+                    chunk.close();
 
                 } else {
-                    (<audioPlayback.AudioPlayback> track.player)
-                        .play(<Float32Array[]> chunk.decoded);
+                    let latency =
+                        (<weasound.AudioPlayback> track.player)
+                            .play(<Float32Array[]> chunk.decoded);
+
+                    // Only use the latency data from the first audio track
+                    if (track.firstAudioTrack) {
+                        if (latency > 500)
+                            latency = 500;
+                        if (latency > this.audioLatency) {
+                            this.audioLatency = latency;
+                        } else {
+                            this.audioLatency =
+                                (this.audioLatency * 63 / 64) +
+                                (latency / 64);
+                        }
+                    }
 
                 }
             })();
 
             // Set the time on the next relevant packet
-            for (const next of this.data) {
-                if (next && next.trackIdx === chunk.trackIdx) {
-                    next.idealTimestamp = chunk.idealTimestamp +
-                        Math.round(this.stream[chunk.trackIdx].frameDuration / 1000);
-                    break;
+            if (chunk.remoteTimestamp >= 0) {
+                for (const next of this.data) {
+                    if (next && next.remoteTimestamp >= 0) {
+                        const delay = Math.min(
+                            next.remoteTimestamp - chunk.remoteTimestamp,
+                            40
+                        );
+                        next.idealTimestamp = Math.max(
+                            chunk.idealTimestamp + delay,
+                            chunk.idealTimestamp
+                        );
+                        break;
+                    }
                 }
             }
         }
@@ -1247,7 +1413,7 @@ export class Peer {
                 for (let i = 0; i < len; i++)
                     this.dropLog.push(false);
                 this.drops = 0;
-            }, 5000);
+            }, dropTimeout);
         }
     }
 
@@ -1320,10 +1486,30 @@ export class Peer {
     dropInfoTimeout: number | null;
 
     /**
+     * If the # of drops *outgoing* has been reported high, we set this, and
+     * the central room management can use it to determine how to react.
+     * @private
+     */
+    outgoingDrops: boolean;
+
+    /**
+     * If the remote side stops telling us about drops, we forget about it
+     * using this timeout.
+     * @private
+     */
+    outgoingDropsTimeout: number | null;
+
+    /**
      * Each track's information.
      * @private
      */
     tracks: Track[];
+
+    /**
+     * The (current) latency in playing audio data. Used to delay video
+     * display.
+     */
+    audioLatency: number;
 
     /**
      * The RTC connection to this peer.
@@ -1387,10 +1573,14 @@ export class Peer {
     pongs: number[];
 
     /**
-     * Ideal buffer duration *in milliseconds*, based on ping-pong time. Use
-     * the getter instead of this.
+     * Ideal buffer duration in milliseconds, based on ping-pong time.
      */
-    private _idealBufferMs: number;
+    private _idealBufferFromPingMs: number;
+
+    /**
+     * Ideal buffer duration in milliseconds, based on the actual data.
+     */
+    private _idealBufferFromDataMs: number;
 
     /**
      * Number of incoming reliable streams. A number instead of a boolean so
@@ -1407,6 +1597,7 @@ export class Peer {
 class Track {
     constructor() {
         this.video = false;
+        this.firstAudioTrack = false;
         this.duration = 0;
         this.decoder = null;
         this.resampler = null;
@@ -1419,6 +1610,13 @@ class Track {
      * @private
      */
     video: boolean;
+
+    /**
+     * Is this the *first* audio track? (We care because the first audio track
+     * is used to measure audio latency)
+     * @private
+     */
+    firstAudioTrack: boolean;
 
     /**
      * The duration of data that we have for this track.
@@ -1448,7 +1646,7 @@ class Track {
      * Player for this track.
      * @private
      */
-    player: audioPlayback.AudioPlayback | videoPlayback.VideoPlayback;
+    player: weasound.AudioPlayback | videoPlayback.VideoPlayback;
 }
 
 /**
@@ -1473,19 +1671,29 @@ class IncomingData {
          * Is this a keyframe?
          * @private
          */
-        public key: boolean,
-
-        /**
-         * The number of parts to expect.
-         */
-        partCt: number
+        public key: boolean
     ) {
-        this.encoded = Array(partCt).fill(null);
+        this.encoded = null;
         this.decoded = null;
-        this.idealTimestamp = -1;
+        this.idealTimestamp =
+            this.remoteTimestamp =
+            this.arrivedTimestamp = -1;
         this.decoding = false;
         this.decodingPromise =
             new Promise<void>(res => this.decodingRes = res);
+    }
+
+    /**
+     * Close any resources associated with this decoder.
+     */
+    close() {
+        if (!this.decoding && !this.decoded)
+            return;
+        this.decodingPromise.then(async () => {
+            const frame = <wcp.VideoFrame> this.decoded;
+            if (frame && frame.close)
+                frame.close();
+        });
     }
 
     /**
@@ -1498,7 +1706,19 @@ class IncomingData {
      * The actual displayable data.
      * @private
      */
-    decoded: Float32Array[] | wcp.VideoFrame;
+    decoded: Float32Array[] | wcp.VideoFrame | wcp.EncodedVideoChunk;
+
+    /**
+     * The timestamp for this chunk, as specified by the sender.
+     * @private
+     */
+    remoteTimestamp: number;
+
+    /**
+     * The timestamp when (the last part of) this chunk arrived.
+     * @private
+     */
+    arrivedTimestamp: number;
 
     /**
      * The ideal timestamp at which to display this.
@@ -1568,9 +1788,6 @@ class Decoder {
         /* Reinitialize (FIXME: Some type of timing so we don't do this over
          * and over?) */
         this.init();
-
-        // If there's a handler for uncaught errors, it will receive this
-        throw error;
     }
 
     /**

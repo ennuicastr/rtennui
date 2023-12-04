@@ -36,4 +36,10 @@ export abstract class AbstractRoom extends events.EventEmitter {
      * @private
      */
     abstract _sendServer(msg: ArrayBuffer): void;
+
+    /**
+     * Attempt to (de)grade bitrate by adjusting video tracks.
+     * @private
+     */
+    abstract _grade(by: number): boolean;
 }

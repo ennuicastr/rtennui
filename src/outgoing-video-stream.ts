@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021, 2022 Yahweasel
+ * Copyright (c) 2021-2023 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -22,156 +22,130 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
 /**
- * An outgoing video stream.
+ * An outgoing video stream. Basically a thin wrapper around VideoCapture, with
+ * automatic reloading.
  *
  * Events:
- * * data(VideoFrame): Emitted when a video frame is ready.
- * * error(DOMException): Emitted when an error occurs.
+ * * data(EncodedVideoChunk): Emitted when a video chunk is ready.
  *
  * @private
  */
 export class OutgoingVideoStream extends events.EventEmitter {
     constructor(
-        public capture: videoCapture.VideoCapture
+        public ms: MediaStream,
+        private _codec: string
     ) {
         super();
-        this.format = null;
-        this._ct = 0;
-        this._ifreq = 0;
     }
 
     /**
-     * Initialize this outgoing video stream and start it generating video.
-     * @private
-     * @param format  Video format.
+     * An OutgoingVideoStream must be initialized to start producing frames.
      */
-    async init(format: string) {
-        // Our video encoder configuration
-        let w = this.capture.getWidth();
-        let h = this.capture.getHeight();
-        const fr = this.capture.getFramerate();
-        this._ifreq = ~~(fr * 2);
-        this.format = format;
+    async init() {
+        const s = this.ms.getVideoTracks()[0].getSettings();
+        const codec = this._codec;
+        let width = s.width;
+        let height = s.height;
 
-        // Convert to WebCodecs
-        let codec: any;
-        if (format === "vh263.2") {
-            codec = {libavjs:{
-                codec: "h263p",
-                ctx: {
-                    pix_fmt: 0,
-                    width: w,
-                    height: h,
-                    framerate_num: ~~fr,
-                    framerate_den: 1,
-                    bit_rate: h * 2500,
-                    bit_ratehi: 0
-                }
-            }};
-        } else {
-            codec = format.slice(1);
-        }
-
-        const config: wcp.VideoEncoderConfig = {
-            codec,
-            width: w,
-            height: h,
-            framerate: fr,
-            bitrate: h * 2500,
-            latencyMode: "realtime"
-        };
-
-        // Create our VideoEncoder
-        const env = this._env =
-            await LibAVWebCodecs.getVideoEncoder(config);
-        this.capture.VideoFrame = env.VideoFrame;
-
-        // If we're using the polyfill, don't go above 360p
-        if (env.VideoEncoder === LibAVWebCodecs.VideoEncoder) {
-            if (h > 360) {
-                w = Math.round((w / h) * 360 / 8) * 8;
-                h = 360;
-                config.width = w;
-                config.height = h;
-                config.bitrate = h * 2500;
-                if (codec.libavjs) {
-                    codec.libavjs.ctx.width = w;
-                    codec.libavjs.ctx.height = h;
-                    codec.libavjs.bit_rate = h * 2500;
-                }
+        if (!width || !height) {
+            /* Size not yet known. This happens in particular on Safari with
+             * screen capture. The trick to get the actual size is to go
+             * through an HTMLVideoElement. */
+            const ve = document.createElement("video");
+            ve.srcObject = this.ms;
+            ve.defaultMuted = ve.muted = true;
+            ve.style.display = "none";
+            document.body.appendChild(ve);
+            ve.play().catch(console.error);
+            if (!ve.videoWidth) {
+                await Promise.race([
+                    new Promise(res => ve.onloadedmetadata),
+                    new Promise(res => setTimeout(res, 1000))
+                ]);
             }
+            width = ve.videoWidth || 640;
+            height = ve.videoHeight || 360;
+            try {
+                ve.pause();
+            } catch (ex) {}
+            try {
+                ve.parentNode.removeChild(ve);
+            } catch (ex) {}
+            ve.srcObject = null;
         }
 
-        const encoder = this._encoder =
-            new env.VideoEncoder({
-                output: data => {
-                    this.emitEvent("data", data);
-                },
-                error: error => {
-                    this.emitEvent("error", error);
-                }
-            });
+        if (!width || !height) {
+            width = 640;
+            height = 360;
+        }
 
-        // Configure it
-        await encoder.configure(config);
+        this._width = width;
+        this._height = height;
 
-        // Hook it up
-        this.capture.on("data", data => this._oninput(data));
+        const bitrate = this._bitrate = height * 2500;
+        this._capture = await videoCapture.createVideoCapture(this.ms, {
+            codec: codec.slice(1),
+            width: width,
+            height: height,
+            bitrate: bitrate,
+            latencyMode: "realtime"
+        });
+        this._capture.on("data", data => this.emitEvent("data", data));
     }
 
     /**
-     * Close this stream.
-     * @private
+     * (De)grade the quality.
+     */
+    grade(by: number) {
+        return this._capture.grade(by);
+    }
+
+    /**
+     * Get the codec of this stream.
+     */
+    getCodec() {
+        return this._codec;
+    }
+
+    /**
+     * Get the current bitrate of this stream.
+     */
+    getBitrate() {
+        return this._bitrate; // FIXME
+    }
+
+    /**
+     * Get the framerate of this stream.
+     */
+    getFramerate() {
+        return this._capture.getFramerate();
+    }
+
+    /**
+     * Get the nominal width of this stream.
+     */
+    getWidth() {
+        return this._width;
+    }
+
+    /**
+     * Get the nominal height of this stream.
+     */
+    getHeight() {
+        return this._height;
+    }
+
+    /**
+     * Close this outgoing stream.
      */
     async close() {
-        this.capture.close();
-
-        if (!this._encoder)
-            return;
-
-        await this._encoder.flush();
-        this._encoder.close();
-        this._encoder = null;
+        await this._capture.close();
     }
 
-    /**
-     * Input from the video capture.
-     */
-    private _oninput(data: wcp.VideoFrame) {
-        if (!this._encoder || this._encoder.encodeQueueSize > 1)
-            return;
-        let key = false;
-        if (++this._ct >= this._ifreq) {
-            this._ct = 0;
-            key = true;
-        }
-        this._encoder.encode(data, {keyFrame: key});
-        data.close();
-    }
+    private _bitrate: number;
 
-    /**
-     * Format used.
-     * @private
-     */
-    format: string;
+    private _width: number;
+    private _height: number;
 
-    /**
-     * Number of frames encoded since the last keyframe.
-     */
-    private _ct: number;
-
-    /**
-     * Number of frames per keyframe.
-     */
-    private _ifreq: number;
-
-    /**
-     * Underlying encoder environment.
-     */
-    private _env: wcp.VideoEncoderEnvironment;
-
-    /**
-     * Underlying encoder.
-     */
-    private _encoder: wcp.VideoEncoder;
+    private _capture: videoCapture.VideoCapture;
 }
