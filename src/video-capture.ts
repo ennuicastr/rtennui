@@ -147,10 +147,17 @@ class VideoCaptureWebCodecs extends VideoCapture {
     ) {
         super();
 
-        const settings = _ms.getVideoTracks()[0].getSettings();
-        this._framerate = settings.frameRate;
-        let width = this._width = settings.width;
-        let height = this._height = settings.height;
+        // Get the initial width and height
+        let width = _config.width;
+        let height = _config.height;
+
+        if (!width || !height) {
+            // Set the width and height from the input
+            const settings = _ms.getVideoTracks()[0].getSettings();
+            this._framerate = settings.frameRate;
+            width = settings.width;
+            height = settings.height;
+        }
 
         if (_config.codec === "vp8lo") {
             /* "vp8lo" really just means "VP8, but be gentle for software
@@ -161,16 +168,28 @@ class VideoCaptureWebCodecs extends VideoCapture {
             height = this._height = 360;
         }
 
-        _config.width = width;
-        _config.height = height;
+        this._width = _config.width = width;
+        this._height = _config.height = height;
     }
 
     async initEncoder() {
+        const config = this._config;
+
+        // Set the scalability mode
+        for (const mode of ["L1T3", "L1T2", "L1T1", void 0]) {
+            config.scalabilityMode = mode;
+            try {
+                const support = await VideoEncoder.isConfigSupported(config);
+                if (support.supported)
+                    break;
+            } catch (ex) { /* just try the next mode */ }
+        }
+
         this._videoEncoder = new VideoEncoder({
             output: x => this.onChunk(x),
             error: x => this.onError(x)
         });
-        await this._videoEncoder.configure(this._config);
+        await this._videoEncoder.configure(config);
         this._forceKeyframe = this._framerate * 2;
     }
 
