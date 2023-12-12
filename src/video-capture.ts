@@ -16,6 +16,7 @@
  */
 
 import * as events from "./events";
+import * as videoCodecs from "./video-codecs";
 
 import type * as libavT from "libav.js";
 declare let LibAV: libavT.LibAVWrapper;
@@ -620,7 +621,8 @@ export async function codecSupportList(): Promise<string[]> {
             cap = "wcmstp";
 
         // Check for what's supported by VideoEncoder
-        for (const codec of ["vp09.00.51.08", "vp8"]) {
+        for (const codecDesc of videoCodecs.codecs) {
+            const codec = codecDesc.webCodecs;
             if (cs[codec])
                 continue;
             try {
@@ -643,11 +645,11 @@ export async function codecSupportList(): Promise<string[]> {
 
     if (typeof MediaRecorder !== "undefined") {
         // Check what's supported by MediaRecorder
-        for (const codec of [
-            ["vp9", "vp09.00.51.08"], ["vp8", "vp8"], ["vp8", "vp8lo"]
-        ]) {
-            const mrCodec = codec[0];
-            const wcCodec = codec[1];
+        for (const codecDesc of videoCodecs.codecs) {
+            const mrCodec = codecDesc.mediaRecorder;
+            const wcCodec = codecDesc.webCodecs;
+            if (!mrCodec)
+                continue;
             if (cs[wcCodec])
                 continue;
             try {
