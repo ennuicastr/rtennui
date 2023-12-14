@@ -148,14 +148,16 @@ class VideoCaptureWebCodecs extends VideoCapture {
     ) {
         super();
 
+        // Get the framerate
+        const settings = _ms.getVideoTracks()[0].getSettings();
+        this._framerate = settings.frameRate;
+
         // Get the initial width and height
         let width = _config.width;
         let height = _config.height;
 
         if (!width || !height) {
             // Set the width and height from the input
-            const settings = _ms.getVideoTracks()[0].getSettings();
-            this._framerate = settings.frameRate;
             width = settings.width;
             height = settings.height;
         }
