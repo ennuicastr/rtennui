@@ -49,7 +49,7 @@ export abstract class VideoCapture extends events.EventEmitter {
      *                     precise, but choose a value less than 1 to degrade,
      *                     greater than 1 to enhance.
      */
-    abstract grade(enhancement: number): Promise<boolean>;
+    abstract grade(enhancement: number): boolean;
 
     /**
      * Stop this video capture and remove any underlying data.
@@ -106,7 +106,7 @@ export class VideoCaptureTee extends VideoCapture {
         super();
     }
 
-    override grade(enhancement: number): Promise<boolean> {
+    override grade(enhancement: number): boolean {
         return this._base.grade(enhancement);
     }
 
@@ -173,6 +173,9 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
         this._width = _config.width = width;
         this._height = _config.height = height;
+
+        // A single promise for synchronizing things
+        this._p = Promise.all([]);
     }
 
     async initEncoder() {
@@ -196,7 +199,7 @@ class VideoCaptureWebCodecs extends VideoCapture {
         this._forceKeyframe = this._framerate * 2;
     }
 
-    override async grade(enhancement: number): Promise<boolean> {
+    override grade(enhancement: number): boolean {
         const newConfig = Object.assign({}, this._config);
         const width = this.getWidth();
         const height = this.getHeight();
@@ -222,7 +225,7 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
         // And start the new one
         this._config = newConfig;
-        await this.initEncoder();
+        this._p = this._p.then(() => this.initEncoder()).catch(console.error);
         return true;
     }
 
@@ -287,6 +290,9 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
     // Video encoder
     private _videoEncoder: wcp.VideoEncoder;
+
+    // Shared promise
+    private _p: Promise<unknown>;
 }
 
 /**
@@ -418,6 +424,9 @@ class VideoCaptureMediaRecorder extends VideoCapture {
 
         // Framerate isn't yet known
         this._framerate = 0;
+
+        // Global synchronization promise
+        this._p = Promise.all([]);
     }
 
     async init(): Promise<void> {
@@ -550,7 +559,7 @@ class VideoCaptureMediaRecorder extends VideoCapture {
         })();
     }
 
-    override async grade(enhancement: number): Promise<boolean> {
+    override grade(enhancement: number): boolean {
         // All we can change with MediaRecorder is the bitrate
         const newConfig = Object.assign({}, this._config);
         const height = newConfig.height;
@@ -569,7 +578,7 @@ class VideoCaptureMediaRecorder extends VideoCapture {
         } catch (ex) {}
 
         // And make a new one
-        await this.init();
+        this._p = this._p.then(() => this.init()).catch(console.error);
 
         return true;
     }
@@ -605,6 +614,9 @@ class VideoCaptureMediaRecorder extends VideoCapture {
 
     // The framerate, detected from the data
     private _framerate: number;
+
+    // Synchronization promise
+    private _p: Promise<unknown>;
 }
 
 /**
