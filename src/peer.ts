@@ -1267,17 +1267,22 @@ export class Peer {
                 break;
             }
 
-            /* Do we have *way* too much data (more than 500ms)? */
-            while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                   >= 500000) {
-                const chunk = this.shift(true);
-                if (chunk)
-                    chunk.close();
+            const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
+
+            /* Do we have *way* too much data (more than quadruple our ideal
+             * buffer, and more than 500ms)? */
+            if (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
+                >= tooMuch * 2) {
+                while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
+                       >= tooMuch) {
+                   const chunk = this.shift(true);
+                   if (chunk)
+                       chunk.close();
+                }
             }
 
             /* Do we have too much data (more than double our ideal buffer, and
              * more than 250ms)? */
-            const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= tooMuch) {
                 const chunk = this.shift();
