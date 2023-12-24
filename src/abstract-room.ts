@@ -32,10 +32,34 @@ export abstract class AbstractRoom extends events.EventEmitter {
     abstract _getOwnId(): number;
 
     /**
+     * Get the current outgoing stream ID.
+     * @private
+     */
+    abstract _getStreamId(): number;
+
+    /**
+     * Get the next outgoing packet index.
+     * @private
+     */
+    abstract _getPacketIdx(): number;
+
+    /**
      * Send a message to the server.
      * @private
      */
     abstract _sendServer(msg: ArrayBuffer): void;
+
+    /**
+     * Relay a message to a specific list of users.
+     * @param msg  Message to relay
+     * @param targets  User IDs to relay it to
+     * @private
+     */
+    abstract _relayMessage(
+        msg: ArrayBuffer, targets: number[], opts?: {
+            reliability?: number
+        }
+    ): void;
 
     /**
      * Attempt to (de)grade bitrate by adjusting video tracks.

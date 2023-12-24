@@ -29,12 +29,7 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
 /**
- * Timeout between checking for high drop rate.
- */
-const dropTimeout = 2000;
-
-/**
- * Timeout before forgetting about high drop rate.
+ * The duration before forgetting a drop report.
  */
 const dropForgetTimeout = 5000;
 
@@ -79,18 +74,6 @@ export class Peer {
         this.data = null;
         this.offset = 0;
 
-        // We log 128 packets for the drop log
-        let dropLog: boolean[] = this.dropLog = [];
-        for (let i = 0; i < 128; i++) {
-            dropLog.push(false);
-        }
-        this.drops = 0;
-        this.dropInfoTimeout = null;
-
-        // And remember if they've told us we have a high drop rate
-        this.outgoingDrops = false;
-        this.outgoingDropsTimeout = null;
-
         this.tracks = null;
         this.audioLatency = 0;
         this.rtc = null;
@@ -105,6 +88,8 @@ export class Peer {
         this._idealBufferFromPingMs = 0;
         this._idealBufferFromDataMs = 0;
         this._incomingReliable = 0;
+
+        this._inAckInterval = setInterval(() => this._checkInAcks(), 1000);
     }
 
     /**
@@ -116,6 +101,7 @@ export class Peer {
             return;
         this.closed = true;
         this.closeStream();
+        clearInterval(this._inAckInterval);
         this.promise = this.promise.then(async () => {
             if (this.rtc) {
                 this.rtc.close();
@@ -823,77 +809,66 @@ export class Peer {
     }
 
     /**
+     * Called when an ack of data is received for this peer.
+     */
+    recvAck(pkt: DataView) {
+        try {
+            const p = prot.parts.ack;
+            if (pkt.getUint16(p.type, true) !== prot.ids.data) {
+                // No other acking currently needed
+                return;
+            }
+
+            // Check that it's the right stream
+            if (pkt.getUint8(p.type) !== this.room._getStreamId())
+                return;
+
+            // Get the range being acked
+            const msgU8 = new Uint8Array(pkt.buffer);
+            const offset = {offset: p.dataAcks};
+            const from = util.decodeNetInt(msgU8, offset) - this._inAckedOffset;
+            let to = util.decodeNetInt(msgU8, offset) - this._inAckedOffset;
+            if (to < from)
+                to = from;
+            else if (to > from + 1024)
+                to = from + 1024;
+            let bitIdx = -1;
+            if (to <= 0)
+                return;
+
+            // Make sure we have room
+            while (to < this._inAcked.length)
+                this._inAcked.push(false);
+
+            // And read our acks
+            for (let idx = from; idx < to; idx++) {
+                // Move to the next bit
+                bitIdx++;
+                if (bitIdx >= 8) {
+                    bitIdx = 0;
+                    offset.offset++;
+                }
+
+                if (idx < 0)
+                    continue;
+
+                // Get its value
+                const idxAcked = !!(msgU8[offset.offset] & (1 << bitIdx));
+                if (idxAcked)
+                    this._inAcked[idx] = true;
+            }
+        } catch (ex) {
+            // Errors are equivalent to nacks
+        }
+    }
+
+    /**
      * Called when metadata (info) for this peer is received.
      * @private
      * @param data  Received info packet.
      */
     recvInfo(pkt: DataView) {
-        try {
-            const p = prot.parts.info;
-            const info = JSON.parse(
-                util.decodeText(
-                    (new Uint8Array(pkt.buffer)).subarray(p.data)
-                )
-            );
-
-            // c is the "command" (tho these are generally not command-like)
-            switch (info.c) {
-                case "dropRate":
-                    // Our drop rate to this peer is high. Mark it.
-                    this.outgoingDrops = true;
-                    if (this.outgoingDropsTimeout)
-                        clearTimeout(this.outgoingDropsTimeout);
-                    this.outgoingDropsTimeout = setTimeout(() => {
-                        this.outgoingDrops = false;
-                    }, dropForgetTimeout);
-
-                    // Possibly just degrade for now
-                    if (this.room._grade(0.5))
-                        break;
-
-                    /* Couldn't degrade. Either reconnect with more
-                     * retransmits, or abort the P2P connection entirely and
-                     * proxy via the server. */
-                    switch (this.reliability) {
-                        case net.Reliability.RELIABLE:
-                            // Use a semi-reliable connection
-                            this.reliability = net.Reliability.SEMIRELIABLE;
-                            if (!this.semireliable)
-                                this.p2p();
-                            break;
-
-                        case net.Reliability.SEMIRELIABLE:
-                        case net.Reliability.UNRELIABLE:
-                        default:
-                            // Don't use any P2P connections
-                            this.reliability = net.Reliability.UNRELIABLE;
-                            if (this.semireliable) {
-                                this.semireliable.close();
-                                this.semireliable = null;
-                            }
-                            if (this.reliable) {
-                                this.reliable.close();
-                                this.reliable = null;
-                            }
-                            this.p2p();
-                            break;
-                    }
-
-                    /* Our drop rate (to this peer) is high. Abort the P2P
-                     * connection and relay. */
-                    this.reliability = net.Reliability.UNRELIABLE;
-                    if (this.semireliable) {
-                        this.semireliable.close();
-                        this.semireliable = null;
-                    }
-                    if (this.reliable) {
-                        this.reliable.close();
-                        this.reliable = null;
-                    }
-                    this.p2p();
-                    break;
-            }
-        } catch (ex) {}
+        // No info is currently supported
     }
 
     /**
@@ -965,6 +940,40 @@ export class Peer {
             if (partIdx === 0)
                 idata.remoteTimestamp = timestamp;
             idata.arrivedTimestamp = performance.now();
+
+            // Check if it's complete and ack it if it is
+            let complete = true;
+            for (let i = 0; i < idata.encoded.length; i++) {
+                if (!idata.encoded[i]) {
+                    complete = false;
+                    break;
+                }
+            }
+            if (complete) {
+                // Find the right offset to ack
+                if (!this._outAcked.length)
+                    this._outAckedOffset = packetIdx;
+                let ackOffset = packetIdx - this._outAckedOffset;
+                while (this._outAcked.length < ackOffset &&
+                       this._outAcked.length < 1024) {
+                    this._outAcked.push(false);
+                }
+                while (ackOffset < 0 && this._outAcked.length < 1024) {
+                    ackOffset++;
+                    this._outAcked.unshift(false);
+                }
+
+                // Ack it
+                if (ackOffset >= 0 && ackOffset < this._outAcked.length)
+                    this._outAcked[ackOffset] = true;
+
+                // Set the ack timeout
+                if (!this._outAckTimeout) {
+                    this._outAckTimeout = setTimeout(
+                        () => this._doOutAck(), 100
+                    );
+                }
+            }
 
         } catch (ex) {}
 
@@ -1202,7 +1211,6 @@ export class Peer {
                 // Dropped!
                 this.data.shift();
                 this.offset++;
-                this.logDrop(true);
                 continue;
             }
 
@@ -1227,7 +1235,6 @@ export class Peer {
             // We're either displaying it or skipping it, so shift it
             this.data.shift();
             this.offset++;
-            this.logDrop(false);
             const track = this.tracks[next.trackIdx];
             if (track) {
                 track.duration -=
@@ -1387,49 +1394,139 @@ export class Peer {
     }
 
     /**
-     * Log a drop or non-drop of a packet.
-     * @private
-     * @param dropped  True if the packet was dropped.
+     * Perform an outgoing acknowledgment.
      */
-    logDrop(dropped: boolean) {
-        // Shift it into the log
-        if (this.dropLog[0])
-            this.drops--;
-        this.dropLog.shift();
-        this.dropLog.push(dropped);
-        if (dropped)
-            this.drops++;
-        //console.error(`[INFO] Drop rate: ${Math.round(this.drops / this.dropLog.length * 100)}%`);
+    private _doOutAck() {
+        if (!this._outAcked.length)
+            return;
+        const outAcks = this._outAcked;
+        const from = this._outAckedOffset;
+        this._outAcked = [];
 
-        // Check for high drop rate
-        if (!this.dropInfoTimeout &&
-            this.drops >= this.dropLog.length / 16) {
-            // Tell them about it
-            const p = prot.parts.info;
-            const data = util.encodeText(
-                JSON.stringify({
-                    c: "dropRate",
-                    dropRate: this.drops / this.dropLog.length
-                })
-            );
-            const msg = net.createPacket(
-                p.length + data.length,
-                this.id, prot.ids.info,
-                [[p.data, data]]
-            );
-            this.room._sendServer(msg);
+        // Build the ack bit array itself
+        const ackBits = new Uint8Array(Math.ceil(outAcks.length / 8));
+        {
+            let by = 0;
+            let bi = -1;
+            let w = 0;
+            let oai;
+            for (oai = 0; oai < outAcks.length; oai++) {
+                bi++;
+                if (bi >= 8) {
+                    bi = 0;
+                    ackBits[by++] = w;
+                    w = 0;
+                }
+                if (outAcks[oai])
+                    w |= 1 << bi;
+            }
+            ackBits[by] = w;
+        }
 
-            // And wait to tell them again
-            this.dropInfoTimeout = setTimeout(() => {
-                this.dropInfoTimeout = null;
+        // Lengths of the two relevant words
+        const to = from + outAcks.length;
+        const fromLen = util.netIntBytes(from);
+        const toLen = util.netIntBytes(to);
 
-                // Reset the log
-                const len = this.dropLog.length;
-                this.dropLog = [];
-                for (let i = 0; i < len; i++)
-                    this.dropLog.push(false);
-                this.drops = 0;
-            }, dropTimeout);
+        // Build our outgoing acknowledgement message
+        const p = prot.parts.ack;
+        const outAckMsg = net.createPacket(
+            p.dataLength + fromLen + toLen + ackBits.length,
+            this.id, prot.ids.ack,
+            [
+                [p.type, 2, prot.ids.data],
+                [p.dataStreamIdx, 1, this.streamId],
+                [p.dataLength, 0, from],
+                [p.dataLength + fromLen, 0, to],
+                [p.dataLength + fromLen + toLen, ackBits]
+            ]
+        );
+
+        // And send it
+        if (this.reliable) {
+            this.reliable.send(outAckMsg);
+        } else {
+            // Send it via relay
+            this.room._relayMessage(outAckMsg, [this.id]);
+        }
+    }
+
+    /**
+     * Check whether things have been acknowledged.
+     */
+    private _checkInAcks() {
+        // Rotate the ranges for next time
+        const from = this._inAckedOffset;
+        let to = this._inAckHeartbeat;
+        const next = this.room._getPacketIdx();
+        this._inAckHeartbeat = next;
+        to -= from;
+
+        // If we have no range, nothing to ack
+        if (to === 0)
+            return;
+
+        // Separate out the part we're acking
+        while (this._inAcked.length < to)
+            this._inAcked.push(false);
+        const acked = this._inAcked.slice(0, to);
+        this._inAcked = this._inAcked.slice(to);
+
+        // Get our drop rate from this
+        let dropCt = 0;
+        for (const ack of acked) {
+            if (!ack)
+                dropCt++;
+        }
+        const dropRate = dropCt / acked.length;
+
+        // If it's high, do something
+        if (dropRate >= 1/16) {
+            // Our drop rate to this peer is high. Mark it.
+            this.outgoingDrops = true;
+            if (this.outgoingDropsTimeout)
+                clearTimeout(this.outgoingDropsTimeout);
+            this.outgoingDropsTimeout = setTimeout(() => {
+                this.outgoingDrops = false;
+            }, dropForgetTimeout);
+
+            // To avoid crying wolf, drop the next ack cycle
+            while (this._inAckedOffset < this._inAckHeartbeat) {
+                this._inAcked.shift();
+                this._inAckedOffset++;
+            }
+
+            // Possibly just degrade for now
+            if (this.room._grade(0.5))
+                return;
+
+            /* Couldn't degrade. Either reconnect with more
+             * retransmits, or abort the P2P connection entirely and
+             * proxy via the server. */
+            switch (this.reliability) {
+                case net.Reliability.RELIABLE:
+                    // Use a semi-reliable connection
+                    this.reliability = net.Reliability.SEMIRELIABLE;
+                    if (!this.semireliable)
+                        this.p2p();
+                    break;
+
+                case net.Reliability.SEMIRELIABLE:
+                case net.Reliability.UNRELIABLE:
+                default:
+                    // Don't use any P2P connections
+                    this.reliability = net.Reliability.UNRELIABLE;
+                    if (this.semireliable) {
+                        this.semireliable.close();
+                        this.semireliable = null;
+                    }
+                    if (this.reliable) {
+                        this.reliable.close();
+                        this.reliable = null;
+                    }
+                    this.p2p();
+                    break;
+            }
         }
     }
 
@@ -1481,39 +1578,6 @@ export class Peer {
      * @private
      */
     offset: number;
-
-    /**
-     * Drops for the previous (some reasonable amount) packets.
-     * @private
-     */
-    dropLog: boolean[];
-
-    /**
-     * # of drops in the drop log.
-     * @private
-     */
-    drops: number;
-
-    /**
-     * If the # of drops gets too high and we inform the other end, we set a
-     * timeout to avoid telling them repeatedly.
-     * @private
-     */
-    dropInfoTimeout: number | null;
-
-    /**
-     * If the # of drops *outgoing* has been reported high, we set this, and
-     * the central room management can use it to determine how to react.
-     * @private
-     */
-    outgoingDrops: boolean;
-
-    /**
-     * If the remote side stops telling us about drops, we forget about it
-     * using this timeout.
-     * @private
-     */
-    outgoingDropsTimeout: number | null;
 
     /**
      * Each track's information.
@@ -1610,6 +1674,53 @@ export class Peer {
      * connection.
      */
     private _incomingReliable: number;
+
+    /**
+     * Acks of their incoming packets (i.e., outgoing acks).
+     */
+    private _outAcked: boolean[] = [];
+
+    /**
+     * Offset of _outAcked.
+     */
+    private _outAckedOffset: number = 0;
+
+    /**
+     * A timeout to do outgoing acknowledgements.
+     */
+    private _outAckTimeout: number | null;
+
+    /**
+     * Acks of our own outgoing packets (i.e., incoming acks).
+     */
+    private _inAcked: boolean[] = [];
+
+    /**
+     * Offset of _inAcked.
+     */
+    private _inAckedOffset: number = 0;
+
+    /**
+     * The heartbeat times that we use to check acknowledgment. When the
+     * interval fires, we'll check between offset and heartbeat, then offset
+     * becomes heartbeat and heartbeat becomes the current index.
+     */
+    private _inAckHeartbeat: number = 0;
+
+    /**
+     * The interval for checking acknowlegements.
+     */
+    private _inAckInterval: number | null;
+
+    /**
+     * Set when our outgoing drop rate is high.
+     */
+    outgoingDrops: boolean = false;
+
+    /**
+     * A timeout to clear out outgoingDrops when the drop rate is fine.
+     */
+    outgoingDropsTimeout: number | null = null;
 }
 
 /**

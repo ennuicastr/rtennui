@@ -41,6 +41,23 @@ export const protocol = {
     },
 
     parts: {
+        /* ack:
+         * c->c: Acknowledge receipt of data.
+         */
+        ack: {
+            length: 6, // More for specific kinds of ack
+            type: 4, // What's being acked, e.g. data
+
+            // When acking data
+            dataLength: 7, // + much more
+            dataStreamIdx: 6,
+            dataAcks: 7
+            /* Format of dataAcks:
+             * Two netints representing the range (lower-bound inclusive,
+             * upper-bound exclusive) of packets being acked or nacked. Then, a
+             * bitarray of 1=ack 0=nack for that range. */
+        },
+
         /* ping:
          * c->c: Determine latency with this client.
          */

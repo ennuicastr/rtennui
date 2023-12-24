@@ -500,12 +500,15 @@ export class Connection extends abstractRoom.AbstractRoom {
                 break;
             }
 
+            case prot.ids.ack:
             case prot.ids.info:
             case prot.ids.data:
             {
                 const peerO = this._peers[peerId];
                 if (!peerO)
                     break;
+                if (cmd === prot.ids.ack)
+                    peerO.recvAck(msg);
                 if (cmd === prot.ids.info)
                     peerO.recvInfo(msg);
                 else // data
@@ -696,14 +699,17 @@ export class Connection extends abstractRoom.AbstractRoom {
             try {
                 switch (reliability) {
                     case net.Reliability.UNRELIABLE:
-                        if (peer.reliability >= net.Reliability.RELIABLE &&
-                            peer.unreliable) {
+                        /* For unreliable messages, we'll always send it
+                         * unreliably, even if there's little hope of it going
+                         * through */
+                        if (peer.unreliable) {
                             peer.unreliable.send(buf);
                             break;
                         }
                         // Intentional fallthrough
 
                     case net.Reliability.SEMIRELIABLE:
+                        // Bump up semireliable to reliable if needed
                         if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
                             peer.semireliable) {
                             peer.semireliable.send(buf);
@@ -744,46 +750,87 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         // Relay if needed
         if (needRelay.length) {
-            // Build the relay message
-            const rp = prot.parts.relay;
-            const relayMsg = new DataView(net.createPacket(
-                rp.length + 1 + needRelay.length + buf.byteLength,
-                -1, prot.ids.relay, [
-                    [rp.data, 1, needRelay.length],
-                    [rp.data + 1 + needRelay.length, new Uint8Array(buf)]
-                ]
-            ));
-            for (let phi = 0; phi < needRelay.length; phi++)
-                relayMsg.setUint8(rp.data + 1 + phi, needRelay[phi]);
-
-            /* We can either relay via the server's unreliable connection or
-             * via the server's reliable connection. We prefer the unreliable
-             * connection if the data is unreliable *or* the data is
-             * semireliable but the reliable connection is full. We prefer the
-             * reliable connection if the data is reliable, of course. */
-            switch (reliability) {
-                case net.Reliability.RELIABLE:
-                    this._serverReliable.send(relayMsg.buffer);
-                    break;
-
-                case net.Reliability.SEMIRELIABLE:
-                    if (this._serverReliable.bufferedAmount < 8192) {
-                        this._serverReliable.send(relayMsg.buffer);
-                    } else if (this._serverUnreliable) {
-                        this._serverUnreliable.send(relayMsg.buffer);
-                    } else {
-                        this._serverReliable.send(relayMsg.buffer);
-                    }
-                    break;
-
-                default: // unreliable
-                    if (this._serverUnreliable) {
-                        this._serverUnreliable.send(relayMsg.buffer);
-                    } else if (this._serverReliable.bufferedAmount < 8192) {
-                        this._serverReliable.send(relayMsg.buffer);
-                    }
-            }
+            this._relayMessageBitArray(buf, needRelay, {reliability});
         }
+    }
+
+    /**
+     * Relay data, with targets already a bitarray.
+     * @private
+     */
+    private _relayMessageBitArray(
+        msg: ArrayBuffer, targets: number[], opts: {
+            reliability?: net.Reliability
+        } = {}
+    ) {
+        let reliability = net.Reliability.RELIABLE;
+        if (typeof opts.reliability === "number")
+            reliability = opts.reliability;
+
+        // Build the relay message
+        const rp = prot.parts.relay;
+        const relayMsg = new DataView(net.createPacket(
+            rp.length + 1 + targets.length + msg.byteLength,
+            -1, prot.ids.relay, [
+                [rp.data, 1, targets.length],
+                [rp.data + 1 + targets.length, new Uint8Array(msg)]
+            ]
+        ));
+        for (let phi = 0; phi < targets.length; phi++)
+            relayMsg.setUint8(rp.data + 1 + phi, targets[phi]);
+
+        /* We can either relay via the server's unreliable connection or
+         * via the server's reliable connection. We prefer the unreliable
+         * connection if the data is unreliable *or* the data is
+         * semireliable but the reliable connection is full. We prefer the
+         * reliable connection if the data is reliable, of course. */
+        switch (reliability) {
+            case net.Reliability.RELIABLE:
+                this._serverReliable.send(relayMsg.buffer);
+                break;
+
+            case net.Reliability.SEMIRELIABLE:
+                if (this._serverReliable.bufferedAmount < 8192) {
+                this._serverReliable.send(relayMsg.buffer);
+                } else if (this._serverUnreliable) {
+                    this._serverUnreliable.send(relayMsg.buffer);
+                } else {
+                    this._serverReliable.send(relayMsg.buffer);
+                }
+                break;
+
+            default: // unreliable
+                if (this._serverUnreliable) {
+                    this._serverUnreliable.send(relayMsg.buffer);
+                } else if (this._serverReliable.bufferedAmount < 8192) {
+                this._serverReliable.send(relayMsg.buffer);
+                }
+        }
+    }
+
+    /**
+     * Relay a message to a specific list of users.
+     * @param msg  Message to relay
+     * @param targets  User IDs to relay it to
+     * @private
+     */
+    override _relayMessage(
+        msg: ArrayBuffer, targets: number[], opts: {
+            reliability?: number
+        } = {}
+    ): void {
+        // Turn targets into a bitarray
+        const tba: number[] = [];
+        for (const target of targets) {
+            const phi = ~~(target / 8);
+            const plo = target % 8;
+            while (tba.length < phi)
+                tba.push(0);
+            tba[phi] |= 1 << plo;
+        }
+
+        // Then send it
+        this._relayMessageBitArray(msg, tba, opts);
     }
 
     /**
@@ -969,6 +1016,10 @@ export class Connection extends abstractRoom.AbstractRoom {
     // AbstractRoom methods
     /** @private */
     override _getOwnId() { return this._id; }
+    /** @private */
+    override _getStreamId() { return this._streamId; }
+    /** @private */
+    override _getPacketIdx() { return this._packetIdx; }
     /** @private */
     override _sendServer(msg: ArrayBuffer) {
         if (this._serverReliable)
