@@ -44,8 +44,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
     async init() {
         const s = this.ms.getVideoTracks()[0].getSettings();
         const codec = this._codec;
-        let width = s.width;
-        let height = s.height;
+        let width = Math.round(s.width);
+        let height = Math.round(s.height);
 
         if (!width || !height) {
             /* Size not yet known. This happens in particular on Safari with
@@ -63,8 +63,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
                     new Promise(res => setTimeout(res, 1000))
                 ]);
             }
-            width = ve.videoWidth || 640;
-            height = ve.videoHeight || 360;
+            width = Math.round(ve.videoWidth) || 640;
+            height = Math.round(ve.videoHeight) || 360;
             try {
                 ve.pause();
             } catch (ex) {}

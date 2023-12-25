@@ -166,9 +166,9 @@ class VideoCaptureWebCodecs extends VideoCapture {
             /* "vp8lo" really just means "VP8, but be gentle for software
              * decoders" */
             _config.codec = "vp8";
-            width = this._width =
-                Math.round(this._width / this._height * 360 / 8) * 8;
-            height = this._height = 360;
+            width =
+                Math.round(width / height * 360 / 8) * 8;
+            height = 360;
         }
 
         this._width = _config.width = width;
