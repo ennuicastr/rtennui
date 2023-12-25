@@ -670,6 +670,10 @@ export async function codecSupportList(): Promise<string[]> {
                 if (MediaRecorder.isTypeSupported(`video/webm; codecs=${mrCodec}`)) {
                     cs[wcCodec] = "mr";
                     csl.push(wcCodec);
+                    if (mrCodec === "vp8") {
+                        cs.vp8lo = "mr";
+                        csl.push("vp8lo");
+                    }
                 }
             } catch (ex) {}
         }

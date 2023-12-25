@@ -1060,6 +1060,13 @@ export class Peer {
     } = {}) {
         const track = this.tracks[packet.trackIdx];
 
+        // No decoder, no decode
+        if (!track) {
+            packet.decoding = true;
+            packet.decodingRes();
+            return;
+        }
+
         /* If it's a video track with a player that self-decodes, we can just
          * transfer the data directly. */
         if (!track.decoder && track.video &&
