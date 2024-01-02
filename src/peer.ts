@@ -89,6 +89,7 @@ export class Peer {
         this._idealBufferFromDataMs = 0;
         this._incomingReliable = 0;
 
+        this.newOutgoingStream();
         this._inAckInterval = setInterval(() => this._checkInAcks(), 1000);
     }
 
@@ -442,6 +443,10 @@ export class Peer {
         const cmd = msg.getUint16(2, true);
 
         switch (cmd) {
+            case prot.ids.ack:
+                this.recvAck(msg);
+                break;
+
             case prot.ids.ping:
                 // Just reverse it into a pong
                 if (!this.reliable)
@@ -820,7 +825,7 @@ export class Peer {
             }
 
             // Check that it's the right stream
-            if (pkt.getUint8(p.type) !== this.room._getStreamId())
+            if (pkt.getUint8(p.dataStreamIdx) !== this.room._getStreamId() << 4)
                 return;
 
             // Get the range being acked
@@ -837,7 +842,7 @@ export class Peer {
                 return;
 
             // Make sure we have room
-            while (to < this._inAcked.length)
+            while (this._inAcked.length <= to)
                 this._inAcked.push(false);
 
             // And read our acks
@@ -954,7 +959,7 @@ export class Peer {
                 if (!this._outAcked.length)
                     this._outAckedOffset = packetIdx;
                 let ackOffset = packetIdx - this._outAckedOffset;
-                while (this._outAcked.length < ackOffset &&
+                while (this._outAcked.length <= ackOffset &&
                        this._outAcked.length < 1024) {
                     this._outAcked.push(false);
                 }
@@ -1404,6 +1409,7 @@ export class Peer {
      * Perform an outgoing acknowledgment.
      */
     private _doOutAck() {
+        this._outAckTimeout = null;
         if (!this._outAcked.length)
             return;
         const outAcks = this._outAcked;
@@ -1459,6 +1465,14 @@ export class Peer {
     }
 
     /**
+     * When we start a new stream, reset our ack checks.
+     */
+    public newOutgoingStream() {
+        this._inAckedOffset = this._inAckHeartbeat = this.room._getPacketIdx();
+        this._inAcked = [];
+    }
+
+    /**
      * Check whether things have been acknowledged.
      */
     private _checkInAcks() {
@@ -1466,6 +1480,7 @@ export class Peer {
         const from = this._inAckedOffset;
         let to = this._inAckHeartbeat;
         const next = this.room._getPacketIdx();
+        this._inAckedOffset = to;
         this._inAckHeartbeat = next;
         to -= from;
 

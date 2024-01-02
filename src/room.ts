@@ -401,10 +401,6 @@ export class Connection extends abstractRoom.AbstractRoom {
         const cmd = msg.getUint16(2, true);
 
         switch (cmd) {
-            case prot.ids.ack:
-                // Nothing to do
-                break;
-
             case prot.ids.rping:
                 // Reliability ping. Just reverse it into a pong.
                 msg.setUint16(0, this._getOwnId(), true);
@@ -867,6 +863,13 @@ export class Connection extends abstractRoom.AbstractRoom {
             ]
         );
         this._serverReliable.send(msg);
+
+        // And inform all the peer connections
+        for (const peer of this._peers) {
+            if (!peer)
+                continue;
+            peer.newOutgoingStream();
+        }
     }
 
     /**
