@@ -965,6 +965,7 @@ export class Peer {
                 }
                 while (ackOffset < 0 && this._outAcked.length < 1024) {
                     ackOffset++;
+                    this._outAckedOffset--;
                     this._outAcked.unshift(false);
                 }
 
