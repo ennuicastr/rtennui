@@ -1,6 +1,6 @@
 {
   "name": "rtennui",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "A portable replacement for WebRTC's media component",
   "main": "rtennui.js",
   "types": "src/main.ts",
@@ -23,7 +23,7 @@
     "libav.js": "^4.6.6",
     "libavjs-webcodecs-polyfill": "^0.4.4",
     "minify": "^9.1.0",
-    "weasound": "^1.0.3"
+    "weasound": "^1.0.4"
   },
   "devDependencies": {
     "browser-pack-flat": "^3.5.0",
