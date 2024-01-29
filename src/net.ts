@@ -147,11 +147,21 @@ export class ReliabilityProber {
                 p.length, -1, protocol.ids.rping,
                 [[p.id, 4, this.idx++]]
             );
-            this.conn.send(msg);
 
-            // Mark it as unreceived (because it is so far)
-            this.pongs.push(false);
-            this.drops++;
+            let sendSucceeded = false;
+            try {
+                this.conn.send(msg);
+                sendSucceeded = true;
+
+                // Mark it as unreceived (because it is so far)
+                this.pongs.push(false);
+                this.drops++;
+            } catch (ex) {
+                /* If there was any issue sending the message, it's not
+                 * actually a problem. It's probably just a small send queue
+                 * that we've overwhelmed. Instead, we'll just hold off before
+                 * pinging more. */
+            }
 
             // Maybe narrow the window
             while (this.pongs.length > this.checkCt) {
@@ -162,7 +172,12 @@ export class ReliabilityProber {
             }
 
             // And send more pings
-            if (this.pongs.length < this.checkCt - 1) {
+            if (!sendSucceeded) {
+                if (this.conn.readyState === "open") {
+                    // Just full, give plenty of time
+                    setTimeout(doPing, 10000);
+                }
+            } else if (this.pongs.length < this.checkCt - 1) {
                 // Get our initial pings out fast
                 setTimeout(doPing, 10);
             } else if (this.drops > 1 && this.lastReliability === Reliability.RELIABLE) {

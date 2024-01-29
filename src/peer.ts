@@ -453,7 +453,18 @@ export class Peer {
                     return;
                 msg.setUint16(0, this.room._getOwnId(), true);
                 msg.setUint16(2, prot.ids.pong, true);
-                this.reliable.send(msg.buffer);
+                try {
+                    this.reliable.send(msg.buffer);
+                } catch (ex) {
+                    // Retry *once*
+                    setTimeout(() => {
+                        try {
+                            this.reliable.send(msg.buffer);
+                        } catch (ex) {
+                            console.error(ex);
+                        }
+                    }, 1000);
+                }
                 break;
 
             case prot.ids.rping:
@@ -463,6 +474,8 @@ export class Peer {
                 try {
                     chan.send(msg.buffer);
                 } catch (ex) {
+                    /* This is exactly the kind of reliability issues we
+                     * *should* be dropping for. */
                     console.error(ex);
                 }
                 break;
@@ -518,7 +531,18 @@ export class Peer {
             p.length, this.room._getOwnId(), prot.ids.ping,
             [[p.timestamp, 8, performance.now()]]
         );
-        this.reliable.send(msg);
+        try {
+            this.reliable.send(msg);
+        } catch (ex) {
+            // Retry *once*
+            setTimeout(() => {
+                try {
+                    this.reliable.send(msg);
+                } catch (ex) {
+                    console.error(ex);
+                }
+            }, 1000);
+        }
     }
 
     /**
@@ -1457,9 +1481,15 @@ export class Peer {
         );
 
         // And send it
+        let needRelay = true;
         if (this.reliable) {
-            this.reliable.send(outAckMsg);
-        } else {
+            try {
+                this.reliable.send(outAckMsg);
+                needRelay = false;
+            } catch (ex) {}
+        }
+
+        if (needRelay) {
             // Send it via relay
             this.room._relayMessage(outAckMsg, [this.id]);
         }

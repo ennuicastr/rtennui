@@ -699,8 +699,10 @@ export class Connection extends abstractRoom.AbstractRoom {
                          * unreliably, even if there's little hope of it going
                          * through */
                         if (peer.unreliable) {
-                            peer.unreliable.send(buf);
-                            break;
+                            try {
+                                peer.unreliable.send(buf);
+                                break;
+                            } catch (ex) {}
                         }
                         // Intentional fallthrough
 
@@ -708,15 +710,19 @@ export class Connection extends abstractRoom.AbstractRoom {
                         // Bump up semireliable to reliable if needed
                         if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
                             peer.semireliable) {
-                            peer.semireliable.send(buf);
-                            break;
+                            try {
+                                peer.semireliable.send(buf);
+                                break;
+                            } catch (ex) {}
                         }
                         // Intentional fallthrough
 
                     case net.Reliability.RELIABLE:
                         if (peer.reliable) {
-                            peer.reliable.send(buf);
-                            break;
+                            try {
+                                peer.reliable.send(buf);
+                                break;
+                            } catch (ex) {}
                         }
                         // Intentional fallthrough
 
@@ -786,21 +792,36 @@ export class Connection extends abstractRoom.AbstractRoom {
                 break;
 
             case net.Reliability.SEMIRELIABLE:
-                if (this._serverReliable.bufferedAmount < 8192) {
-                this._serverReliable.send(relayMsg.buffer);
-                } else if (this._serverUnreliable) {
-                    this._serverUnreliable.send(relayMsg.buffer);
-                } else {
+            {
+                let sendReliable = true;
+                if (this._serverReliable.bufferedAmount >= 8192 &&
+                    this._serverUnreliable) {
+                    try {
+                        this._serverUnreliable.send(relayMsg.buffer);
+                        sendReliable = false;
+                    } catch (ex) {}
+                }
+
+                if (sendReliable) {
                     this._serverReliable.send(relayMsg.buffer);
                 }
                 break;
+            }
 
             default: // unreliable
+            {
+                let sendReliable = (this._serverReliable.bufferedAmount < 8192);
                 if (this._serverUnreliable) {
-                    this._serverUnreliable.send(relayMsg.buffer);
-                } else if (this._serverReliable.bufferedAmount < 8192) {
-                this._serverReliable.send(relayMsg.buffer);
+                    try {
+                        this._serverUnreliable.send(relayMsg.buffer);
+                        sendReliable = false;
+                    } catch (ex) {}
                 }
+
+                if (sendReliable) {
+                    this._serverReliable.send(relayMsg.buffer);
+                }
+            }
         }
     }
 
