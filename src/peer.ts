@@ -1199,7 +1199,7 @@ export class Peer {
 
                 if (fframes.length === 0) {
                     // Resampling is taking a frame
-                    packet.decoded = [];
+                    packet.decoded = [new Float32Array(0)];
                 } else {
                     if (fframes.length !== 1)
                         console.error("[ERROR] Number of frames is not 1");
