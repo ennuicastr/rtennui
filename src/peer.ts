@@ -558,8 +558,8 @@ export class Peer {
             pongs.shift();
 
         // Calculate the buffer size
-        this._idealBufferFromPingMs = Math.min(
-            250, // No more than 250ms buffer
+        const idealBuffer = Math.min(
+            2000, // No more than 2 second buffer
             Math.max(
                 10, // No less than 10ms buffer
 
@@ -573,29 +573,33 @@ export class Peer {
                 * 0.75
             )
         );
-
-        if (this.reliable && this._incomingReliable &&
-            this.pongs.length >= idealPings) {
-            const buffer = this.idealBufferMs() * 1.5;
-
-            // Inform the user
-            this.room.emitEvent("peer-p2p-latency", {
-                peer: this.id,
-                network: Math.round(pongs[pongs.length-1]),
-                buffer: buffer,
-                playback: 50, // Just a guess
-                total: Math.round(
-                    // The actual network latency...
-                    pongs[pongs.length-1] +
-
-                    // Our buffer
-                    buffer +
-
-                    // The playback delay (final buffer)
-                    50
-                )
-            });
+        if (idealBuffer > this._idealBufferFromPingMs) {
+            this._idealBufferFromPingMs = idealBuffer;
+        } else {
+            this._idealBufferFromPingMs =
+                (this._idealBufferFromPingMs * 31/32) +
+                (idealBuffer / 32);
         }
+
+        const buffer = this.idealBufferMs() * 1.5;
+
+        // Inform the user
+        this.room.emitEvent("peer-p2p-latency", {
+            peer: this.id,
+            network: Math.round(pongs[pongs.length-1]),
+            buffer: buffer,
+            playback: 50, // Just a guess
+            total: Math.round(
+                // The actual network latency...
+                pongs[pongs.length-1] +
+
+                // Our buffer
+                buffer +
+
+                // The playback delay (final buffer)
+                50
+            )
+        });
 
         this.ping();
     }
@@ -1014,30 +1018,31 @@ export class Peer {
                 if (!idata || idata.remoteTimestamp < 0 ||
                     idata.arrivedTimestamp < 0)
                     continue;
-                diffs.push(idata.arrivedTimestamp - idata.remoteTimestamp);
+                diffs.push(Math.abs(
+                    idata.arrivedTimestamp - idata.remoteTimestamp
+                ));
             }
 
-            let idealBuffer = 0;
             if (diffs.length) {
                 diffs.sort();
 
                 /* The buffer comes from the *range* of possible times it might
                  * take to receive data. */
-                idealBuffer =
-                    (diffs[diffs.length-1] - diffs[0]);
-            } else {
-                this._idealBufferFromDataMs = 0;
-            }
+                const idealBuffer = Math.max(
+                    2000, // No more than 2 seconds
+                    (diffs[diffs.length-1] - diffs[0])
+                );
 
-            /* The value we get raw is a snapshot, and doesn't include any data
-             * we've already gone past, so if it's lower than the current
-             * value, weight it heavily. */
-            if (idealBuffer > this._idealBufferFromDataMs) {
-                this._idealBufferFromDataMs = idealBuffer;
-            } else {
-                this._idealBufferFromDataMs =
-                    (this._idealBufferFromDataMs * 255/256) +
-                    (idealBuffer / 256);
+                /* The value we get raw is a snapshot, and doesn't include any data
+                 * we've already gone past, so if it's lower than the current
+                 * value, weight it heavily. */
+                if (idealBuffer > this._idealBufferFromDataMs) {
+                    this._idealBufferFromDataMs = idealBuffer;
+                } else {
+                    this._idealBufferFromDataMs =
+                        (this._idealBufferFromDataMs * 65535/65536) +
+                        (idealBuffer / 65536);
+                }
             }
         }
 
@@ -1540,6 +1545,7 @@ export class Peer {
             if (this.outgoingDropsTimeout)
                 clearTimeout(this.outgoingDropsTimeout);
             this.outgoingDropsTimeout = setTimeout(() => {
+                this.outgoingDropsTimeout = null;
                 this.outgoingDrops = false;
             }, dropForgetTimeout);
 
