@@ -1028,7 +1028,7 @@ export class Peer {
 
                 /* The buffer comes from the *range* of possible times it might
                  * take to receive data. */
-                const idealBuffer = Math.max(
+                const idealBuffer = Math.min(
                     2000, // No more than 2 seconds
                     (diffs[diffs.length-1] - diffs[0])
                 );
