@@ -1393,8 +1393,6 @@ export class Peer {
                     await (<videoPlayback.VideoPlayback> track.player)
                         .display(<wcp.VideoFrame> chunk.decoded);
 
-                    chunk.close();
-
                 } else {
                     let latency =
                         (<weasound.AudioPlayback> track.player)
@@ -1414,6 +1412,8 @@ export class Peer {
                     }
 
                 }
+
+                chunk.close();
             })();
 
             // Set the time on the next relevant packet
