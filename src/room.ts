@@ -47,6 +47,8 @@ const perPacket = 61440;
  * * disconnected(CloseEvent): The connection has been closed.
  * * peer-joined({id: number, info: any}): A peer has joined.
  * * peer-left({id: number, info: any}): A peer has left.
+ * * peer-speaking({peer: number, speaking: boolean}): Indicate whether a peer
+ *   is speaking.
  * * peer-p2p-connected({peer: number}): We've established a P2P connection
  *   with this peer.
  * * peer-p2p-disconnected({peer: number}): We've lost our P2P connection with

@@ -1409,6 +1409,24 @@ export class Peer {
                                 (this.audioLatency * 63 / 64) +
                                 (latency / 64);
                         }
+
+                        // Update speaking data
+                        if (track.speakingTimeout) {
+                            clearTimeout(track.speakingTimeout);
+                        } else {
+                            this.room.emitEvent("peer-speaking", {
+                                peer: this.id,
+                                speaking: true
+                            });
+                        }
+
+                        track.speakingTimeout = setTimeout(() => {
+                            this.room.emitEvent("peer-speaking", {
+                                peer: this.id,
+                                speaking: false
+                            });
+                            track.speakingTimeout = null;
+                        }, 1000);
                     }
 
                 }
@@ -1805,10 +1823,16 @@ class Track {
 
     /**
      * Is this the *first* audio track? (We care because the first audio track
-     * is used to measure audio latency)
+     * is used to measure audio latency and for speech info)
      * @private
      */
     firstAudioTrack: boolean;
+
+    /**
+     * A timeout for indicating speaking info to the host.
+     * @private
+     */
+    speakingTimeout: number | null = null;
 
     /**
      * The duration of data that we have for this track.
