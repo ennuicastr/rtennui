@@ -201,7 +201,8 @@ export class Peer {
             try {
                 if (!this.unreliable) {
                     this.unreliable = await this.p2pChannel("unreliable", {
-                        ordered: false
+                        ordered: false,
+                        maxRetransmits: 0
                     }, chan => {
                         if (this.unreliable === chan)
                             this.unreliable = null;
