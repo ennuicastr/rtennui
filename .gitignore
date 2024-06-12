@@ -1,6 +1,5 @@
 .*.swp
 node_modules
-package-lock.json
 rtennui.js
 rtennui.min.js
 src/*-js.ts

@@ -23,7 +23,7 @@
     "libav.js": "^4.6.6",
     "libavjs-webcodecs-polyfill": "^0.4.4",
     "minify": "^9.1.0",
-    "weasound": "^1.0.4"
+    "weasound": "^1.2.0"
   },
   "devDependencies": {
     "browser-pack-flat": "^3.5.0",
