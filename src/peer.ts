@@ -74,6 +74,7 @@ export class Peer {
         this.data = null;
         this.dataByTrack = {};
         this.offset = 0;
+        this.offsetByTrack = {};
 
         this.tracks = null;
         this.audioLatency = 0;
@@ -596,6 +597,7 @@ export class Peer {
             this.data = [];
             this.dataByTrack = {};
             this.offset = 0;
+            this.offsetByTrack = {};
 
             const tracks: Track[] =
                 info.map(() => new Track);
@@ -879,6 +881,13 @@ export class Peer {
 
             if (idxOffset < 0 || idxOffset >= 1024)
                 return;
+
+            if (!(trackIdx in this.offsetByTrack))
+                this.offsetByTrack[trackIdx] = this.offset;
+            if (this.offsetByTrack[trackIdx] > packetIdx) {
+                // This track has already played past here
+                return;
+            }
 
             while (this.data.length <= idxOffset)
                 this.data.push(null);
@@ -1239,6 +1248,7 @@ export class Peer {
         trackData[earliestIdx] = null;
         this.tracks[earliestTrack].duration -=
             this.stream[earliestTrack].frameDuration;
+        this.offsetByTrack[earliestTrack] = earliest.index + 1;
 
         // Possibly shift all the track data
         while (this.data.length) {
@@ -1631,6 +1641,12 @@ export class Peer {
      * @private
      */
     offset: number;
+
+    /**
+     * Index of the first packet still being accepted for each track.
+     * @private
+     */
+    offsetByTrack: Record<number, number>;
 
     /**
      * Each track's information.
