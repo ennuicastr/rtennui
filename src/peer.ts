@@ -72,6 +72,7 @@ export class Peer {
         this.playing = false;
         this.stream = null;
         this.data = null;
+        this.dataByTrack = {};
         this.offset = 0;
 
         this.tracks = null;
@@ -593,6 +594,7 @@ export class Peer {
         this.promise = this.promise.then(async () => {
             this.playing = false;
             this.data = [];
+            this.dataByTrack = {};
             this.offset = 0;
 
             const tracks: Track[] =
@@ -880,6 +882,10 @@ export class Peer {
 
             while (this.data.length <= idxOffset)
                 this.data.push(null);
+            if (!this.dataByTrack[trackIdx])
+                this.dataByTrack[trackIdx] = [];
+            while (this.dataByTrack[trackIdx].length <= idxOffset)
+                this.dataByTrack[trackIdx].push(null);
 
             const gopIdxOffset = gopIdx - this.offset;
             if (gopIdxOffset !== idxOffset &&
@@ -888,6 +894,7 @@ export class Peer {
                  * it */
                 if (!this.data[gopIdxOffset]) {
                     this.data[gopIdxOffset] =
+                        this.dataByTrack[trackIdx][gopIdxOffset] =
                         new IncomingData(trackIdx, gopIdx, true);
                     this.tracks[trackIdx].duration +=
                         this.stream[trackIdx].frameDuration;
@@ -905,6 +912,7 @@ export class Peer {
             let idata: IncomingData = this.data[idxOffset];
             if (!idata) {
                 idata = this.data[idxOffset] =
+                    this.dataByTrack[trackIdx][idxOffset] =
                     new IncomingData(trackIdx, packetIdx, key);
                 this.tracks[trackIdx].duration +=
                     this.stream[trackIdx].frameDuration;
@@ -1158,49 +1166,105 @@ export class Peer {
      * @private
      */
     shift(force = false) {
-        while (this.data.length > 1) {
-            const next: IncomingData = this.data[0];
-            if (!next) {
-                // Dropped!
-                this.data.shift();
-                this.offset++;
-                continue;
-            }
+        let earliestTime = 1/0;
+        let earliestTrack = -1;
+        let earliestIdx = -1;
+        let earliest: IncomingData | null = null;
+        let earliestComplete = false;
 
-            // next is set, but might be incomplete
-            let complete = true;
-            if (next.encoded) {
-                for (const part of next.encoded) {
-                    if (!part) {
-                        complete = false;
-                        break;
+        for (const trackStr in this.dataByTrack) {
+            const trackData = this.dataByTrack[trackStr];
+            const trackIdx = +trackStr;
+            const track = this.tracks[trackIdx];
+
+            for (let nextIdx = 0; nextIdx < trackData.length; nextIdx++) {
+                const next = trackData[nextIdx];
+                if (!next)
+                    continue
+
+                if (next.remoteTimestamp >= earliestTime)
+                    break;
+
+                // next is set, but might be incomplete
+                let complete = false;
+                if (next.encoded) {
+                    complete = true;
+                    for (const part of next.encoded) {
+                        if (!part) {
+                            complete = false;
+                            break;
+                        }
                     }
                 }
-            } else {
-                complete = false;
+
+                if (!complete && !force) {
+                    if (next.key)
+                        break; // Can't skip a keyframe
+                    else
+                        continue;
+                }
+
+                /* NOTE: remoteTimestamp *can* by < 0, in which case we're
+                 * treating an incomplete packet as the earliest packet. But,
+                 * the only situation where we would be there is if we're
+                 * forcing a drop, and if we're forcing a drop, we *want* to
+                 * drop incomplete packets first! */
+                earliestTime = next.remoteTimestamp;
+                earliestTrack = trackIdx;
+                earliestIdx = nextIdx;
+                earliest = next;
+                earliestComplete = complete;
+                break;
+            }
+        }
+
+        if (!earliest)
+            return null;
+
+        // Remove any preceding data (skipped)
+        const trackData = this.dataByTrack[earliestTrack];
+        for (let idx = 0; idx < earliestIdx; idx++) {
+            const dropped = trackData[idx];
+            if (dropped) {
+                dropped.close();
+                trackData[idx] = null;
+                this.tracks[earliestTrack].duration -=
+                    this.stream[earliestTrack].frameDuration;
+            }
+        }
+
+        // Remove it from the track data
+        trackData[earliestIdx] = null;
+        this.tracks[earliestTrack].duration -=
+            this.stream[earliestTrack].frameDuration;
+
+        // Possibly shift all the track data
+        while (this.data.length) {
+            let allNulls = true;
+            for (const trackStr in this.dataByTrack) {
+                if (this.dataByTrack[trackStr][0]) {
+                    allNulls = false;
+                    break;
+                }
             }
 
-            if (!complete && next.key && !force) {
-                // Can't skip keyframes
-                return null;
-            }
+            if (!allNulls)
+                break;
 
-            // We're either displaying it or skipping it, so shift it
             this.data.shift();
             this.offset++;
-            const track = this.tracks[next.trackIdx];
-            if (track) {
-                track.duration -=
-                    this.stream[next.trackIdx].frameDuration;
-            }
 
-            if (!complete)
-                continue;
-
-            // OK, this part is ready
-            return next;
+            for (const trackStr in this.dataByTrack)
+                this.dataByTrack[trackStr].shift();
         }
-        return null;
+
+        // If it's incomplete, we're dropping it
+        if (!earliestComplete) {
+            earliest.close();
+            return null;
+        }
+
+        return earliest;
     }
 
     /**
@@ -1209,14 +1273,18 @@ export class Peer {
      * @private
      */
     async play() {
-        /* Set the ideal start time on the first packet to give some time to
-         * buffer */
-        for (const chunk of this.data) {
-            if (!chunk)
-                continue;
-            chunk.idealTimestamp = performance.now() + 50;
-            break;
-        }
+        let tsOffset = 0;
+
+        // Helper function to get the ideal timestamp offset
+        const idealTSOffset = delay => {
+            for (const chunk of this.data) {
+                if (!chunk)
+                    continue;
+                tsOffset = chunk.remoteTimestamp - performance.now() - delay;
+                break;
+            }
+        };
+        idealTSOffset(50);
 
         this.playing = true;
 
@@ -1238,9 +1306,10 @@ export class Peer {
                    if (chunk)
                        chunk.close();
                 }
+                idealTSOffset(0);
             }
 
-            /* Do we have too much data (more than 100ms)? */
+            /* Do we have too much data (more than 200ms)? */
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= 200000) {
                 const chunk = this.shift();
@@ -1248,6 +1317,7 @@ export class Peer {
                     chunk.close();
                 else
                     break;
+                idealTSOffset(0);
             }
 
             // Get a chunk
@@ -1263,15 +1333,16 @@ export class Peer {
             if (!chunk.decoding)
                 this.decodeOne(chunk, {force: true});
 
-            // If we blew the deadline, make a new deadline
             const now = performance.now();
-            chunk.idealTimestamp = Math.max(chunk.idealTimestamp, now);
 
             {
                 // Wait until we're actually supposed to be playing this chunk
-                const wait = chunk.idealTimestamp - now;
-                if (wait > 2)
-                    await new Promise(res => setTimeout(res, wait - 2));
+                const wait = chunk.remoteTimestamp - tsOffset - now;
+                if (wait > 500) {
+                    // Something is wrong with our offsets
+                    idealTSOffset(0);
+                } else if (wait > 0)
+                    await new Promise(res => setTimeout(res, wait));
             }
 
             // Decode and present it in the background
@@ -1342,23 +1413,6 @@ export class Peer {
 
                 chunk.close();
             })();
-
-            // Set the time on the next relevant packet
-            if (chunk.remoteTimestamp >= 0) {
-                for (const next of this.data) {
-                    if (next && next.remoteTimestamp >= 0) {
-                        const delay = Math.min(
-                            next.remoteTimestamp - chunk.remoteTimestamp,
-                            40
-                        );
-                        next.idealTimestamp = Math.max(
-                            chunk.idealTimestamp + delay,
-                            chunk.idealTimestamp
-                        );
-                        break;
-                    }
-                }
-            }
         }
     }
 
@@ -1558,6 +1612,12 @@ export class Peer {
      * @private
      */
     data: IncomingData[];
+
+    /**
+     * Incoming data, sorted by track for easy selection.
+     * @private
+     */
+    dataByTrack: Record<number, IncomingData[]>;
 
     /**
      * Offset of the data (i.e., index of the first packet).
@@ -1805,8 +1865,7 @@ class IncomingData {
     ) {
         this.encoded = null;
         this.decoded = null;
-        this.idealTimestamp =
-            this.remoteTimestamp =
+        this.remoteTimestamp =
             this.arrivedTimestamp = -1;
         this.decoding = false;
         this.decodingPromise =
@@ -1849,12 +1908,6 @@ class IncomingData {
      * @private
      */
     arrivedTimestamp: number;
-
-    /**
-     * The ideal timestamp at which to display this.
-     * @private
-     */
-    idealTimestamp: number;
 
     /**
      * Set when this has been sent for decoding.
