@@ -85,8 +85,9 @@ export class Peer {
         this.lastReliableRelayTime = 0;
         this.pingInterval = null;
         this.pongs = [];
-        this._idealBufferFromPingMs = 0;
-        this._idealBufferFromDataMs = 0;
+        this._maxBufferFromPingMs = 0;
+        this._maxBufferFromDataMs = 0;
+        this._currentBuffer = 0;
         this._incomingReliable = 0;
 
         this.newOutgoingStream();
@@ -253,8 +254,9 @@ export class Peer {
 
                 if (!this.reliable &&
                     this.reliability > net.Reliability.UNRELIABLE) {
-                    this.reliable = await this.p2pChannel("reliable", void 0,
-                    chan => {
+                    this.reliable = await this.p2pChannel("reliable", {
+                        ordered: false
+                    }, chan => {
                         if (this.reliable === chan)
                             this.reliable = null;
                     });
@@ -559,10 +561,10 @@ export class Peer {
             pongs.shift();
 
         // Calculate the buffer size
-        const idealBuffer = Math.min(
-            2000, // No more than 2 second buffer
+        const maxBuffer = Math.min(
+            1000, // No more than 1 second buffer
             Math.max(
-                10, // No less than 10ms buffer
+                100, // No less than 100ms buffer
 
                 /* Otherwise, calculate the difference between the max and min
                  * latency */
@@ -574,28 +576,27 @@ export class Peer {
                 * 0.75
             )
         );
-        if (idealBuffer > this._idealBufferFromPingMs) {
-            this._idealBufferFromPingMs = idealBuffer;
+        if (maxBuffer > this._maxBufferFromPingMs) {
+            this._maxBufferFromPingMs = maxBuffer;
         } else {
-            this._idealBufferFromPingMs =
-                (this._idealBufferFromPingMs * 31/32) +
-                (idealBuffer / 32);
+            this._maxBufferFromPingMs =
+                (this._maxBufferFromPingMs * 31/32) +
+                (maxBuffer / 32);
         }
 
-        const buffer = this.idealBufferMs() * 1.5;
 
         // Inform the user
         this.room.emitEvent("peer-p2p-latency", {
             peer: this.id,
             network: Math.round(pongs[pongs.length-1]),
-            buffer: buffer,
+            buffer: this._currentBuffer,
             playback: 50, // Just a guess
             total: Math.round(
                 // The actual network latency...
                 pongs[pongs.length-1] +
 
                 // Our buffer
-                buffer +
+                this._currentBuffer +
 
                 // The playback delay (final buffer)
                 50
@@ -606,19 +607,19 @@ export class Peer {
     }
 
     /**
-     * Get the ideal buffer size for this peer.
+     * Get the maximum buffer size for this peer.
      * @private
      */
-    idealBufferMs() {
+    maxBufferMs() {
         // Ideal buffer from pings...
-        let idealBufferFromPingMs = this._idealBufferFromPingMs;
+        let maxBufferFromPingMs = this._maxBufferFromPingMs;
         if (
             this.reliability < net.Reliability.SEMIRELIABLE ||
             !this.reliable || !this._incomingReliable ||
             this.pongs.length < idealPings
         ) {
             // No reliable connection, so use the default
-            idealBufferFromPingMs = 100;
+            maxBufferFromPingMs = 200;
         }
 
         // No less than two frames
@@ -628,10 +629,8 @@ export class Peer {
                 x => x.frameDuration * 2 / 1000));
         }
 
-        const ideal = Math.max(
-            idealBufferFromPingMs, this._idealBufferFromDataMs, minFromFrames);
-
-        return ideal;
+        return Math.max(
+            maxBufferFromPingMs, this._maxBufferFromDataMs, minFromFrames);
     }
 
     /**
@@ -1012,7 +1011,7 @@ export class Peer {
 
         } catch (ex) {}
 
-        // Compute our ideal buffer from the data we now have
+        // Compute our max buffer from the data we now have
         {
             let diffs: number[] = [];
             for (const idata of this.data) {
@@ -1029,20 +1028,20 @@ export class Peer {
 
                 /* The buffer comes from the *range* of possible times it might
                  * take to receive data. */
-                const idealBuffer = Math.min(
-                    2000, // No more than 2 seconds
+                const maxBuffer = Math.min(
+                    1000, // No more than 1 second
                     (diffs[diffs.length-1] - diffs[0])
                 );
 
                 /* The value we get raw is a snapshot, and doesn't include any data
                  * we've already gone past, so if it's lower than the current
                  * value, weight it heavily. */
-                if (idealBuffer > this._idealBufferFromDataMs) {
-                    this._idealBufferFromDataMs = idealBuffer;
+                if (maxBuffer > this._maxBufferFromDataMs) {
+                    this._maxBufferFromDataMs = maxBuffer;
                 } else {
-                    this._idealBufferFromDataMs =
-                        (this._idealBufferFromDataMs * 65535/65536) +
-                        (idealBuffer / 65536);
+                    this._maxBufferFromDataMs =
+                        (this._maxBufferFromDataMs * 65535/65536) +
+                        (maxBuffer / 65536);
                 }
             }
         }
@@ -1304,7 +1303,7 @@ export class Peer {
         for (const chunk of this.data) {
             if (!chunk)
                 continue;
-            chunk.idealTimestamp = performance.now() + this.idealBufferMs();
+            chunk.idealTimestamp = performance.now() + 100;
             break;
         }
 
@@ -1317,12 +1316,14 @@ export class Peer {
                 break;
             }
 
-            const tooMuch = Math.max(this.idealBufferMs() * 2000, 250000);
+            const currentBuffer = this._currentBuffer =
+                Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0)) / 1000;
 
-            /* Do we have *way* too much data (more than quadruple our ideal
-             * buffer, and more than 500ms)? */
-            if (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                >= tooMuch * 2) {
+            const tooMuch = Math.max(this.maxBufferMs() * 1000, 2000000);
+
+            /* Do we have *way* too much data (more than double our max buffer,
+             * and more than 400ms)? */
+            if (currentBuffer * 1000 >= tooMuch * 2) {
                 while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                        >= tooMuch) {
                    const chunk = this.shift(true);
@@ -1331,8 +1332,8 @@ export class Peer {
                 }
             }
 
-            /* Do we have too much data (more than double our ideal buffer, and
-             * more than 250ms)? */
+            /* Do we have too much data (more than our max buffer, and more
+             * than 200ms)? */
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
                    >= tooMuch) {
                 const chunk = this.shift();
@@ -1737,14 +1738,19 @@ export class Peer {
     pongs: number[];
 
     /**
-     * Ideal buffer duration in milliseconds, based on ping-pong time.
+     * Maximum buffer duration in milliseconds, based on ping-pong time.
      */
-    private _idealBufferFromPingMs: number;
+    private _maxBufferFromPingMs: number;
 
     /**
-     * Ideal buffer duration in milliseconds, based on the actual data.
+     * Maximum buffer duration in milliseconds, based on the actual data.
      */
-    private _idealBufferFromDataMs: number;
+    private _maxBufferFromDataMs: number;
+
+    /**
+     * Current actual buffer duration in milliseconds.
+     */
+    private _currentBuffer: number;
 
     /**
      * Number of incoming reliable streams. A number instead of a boolean so
@@ -2069,5 +2075,5 @@ class Decoder {
     decoder: wcp.AudioDecoder | wcp.VideoDecoder;
     waiters: (() => void)[];
     buf: (wcp.AudioData | wcp.VideoFrame)[];
-    pts: number;
+        pts: number;
 }
