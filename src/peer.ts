@@ -905,8 +905,6 @@ export class Peer {
                     this.data[gopIdxOffset] =
                         this.dataByTrack[trackIdx][gopIdxOffset] =
                         new IncomingData(trackIdx, gopIdx, true);
-                    this.tracks[trackIdx].duration +=
-                        this.stream[trackIdx].frameDuration;
                 }
             }
 
@@ -923,8 +921,6 @@ export class Peer {
                 idata = this.data[idxOffset] =
                     this.dataByTrack[trackIdx][idxOffset] =
                     new IncomingData(trackIdx, packetIdx, key);
-                this.tracks[trackIdx].duration +=
-                    this.stream[trackIdx].frameDuration;
             }
             if (!idata.encoded)
                 idata.encoded = Array(partCt).fill(null);
@@ -1239,15 +1235,11 @@ export class Peer {
             if (dropped) {
                 dropped.close();
                 trackData[idx] = null;
-                this.tracks[earliestTrack].duration -=
-                    this.stream[earliestTrack].frameDuration;
             }
         }
 
         // Remove it from the track data
         trackData[earliestIdx] = null;
-        this.tracks[earliestTrack].duration -=
-            this.stream[earliestTrack].frameDuration;
         this.offsetByTrack[earliestTrack] = earliest.index + 1;
 
         // Possibly shift all the track data
@@ -1306,31 +1298,35 @@ export class Peer {
                 break;
             }
 
-            const currentBuffer = this._currentBuffer =
-                Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0)) / 1000;
-
-            /* Do we have *way* too much data (more than 400ms)? */
-            if (currentBuffer >= 400) {
-                while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                       >= 100000) {
-                   const chunk = this.shift({incomplete: true, key: true});
-                   if (chunk) {
-                       idealTSOffset(chunk, 0);
-                       chunk.close();
-                   }
-                }
-            }
-
-            /* Do we have too much data (more than 200ms)? */
-            while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                   >= 100000) {
-                const chunk = this.shift({incomplete: true});
-                if (chunk) {
-                    idealTSOffset(chunk, 0);
-                    chunk.close();
-                } else {
+            // Find (adjust) the duration of the buffer
+            while (true) {
+                let lo = 0, hi = 0;
+                for (const chunk of this.data) {
+                    if (!chunk || chunk.remoteTimestamp < 0)
+                        continue;
+                    lo = chunk.remoteTimestamp;
                     break;
                 }
+                for (let i = this.data.length - 1; i >= 0; i--) {
+                    const chunk = this.data[i];
+                    if (!chunk || chunk.remoteTimestamp < 0)
+                        continue;
+                    hi = chunk.remoteTimestamp;
+                    break;
+                }
+                const currentBuffer = this._currentBuffer = hi - lo;
+
+                // Possibly discard some data to get the buffer size reasonable
+                if (currentBuffer >= 200) {
+                    const chunk = this.shift({
+                        incomplete: true,
+                        key: currentBuffer >= 400
+                    });
+                    if (chunk) {
+                        idealTSOffset(chunk, 0);
+                        chunk.close();
+                    } else break;
+                } else break;
             }
 
             // Get a chunk
