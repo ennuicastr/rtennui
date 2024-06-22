@@ -1233,7 +1233,7 @@ export class Peer {
             /* Do we have *way* too much data (more than 400ms)? */
             if (currentBuffer >= 400) {
                 while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                       >= 100000) {
+                       >= 200000) {
                    const chunk = this.shift(true);
                    if (chunk)
                        chunk.close();
@@ -1242,7 +1242,7 @@ export class Peer {
 
             /* Do we have too much data (more than 100ms)? */
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                   >= 100000) {
+                   >= 200000) {
                 const chunk = this.shift();
                 if (chunk)
                     chunk.close();
