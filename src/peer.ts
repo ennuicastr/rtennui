@@ -85,8 +85,6 @@ export class Peer {
         this.lastReliableRelayTime = 0;
         this.pingInterval = null;
         this.pongs = [];
-        this._maxBufferFromPingMs = 0;
-        this._maxBufferFromDataMs = 0;
         this._currentBuffer = 0;
         this._incomingReliable = 0;
 
@@ -560,31 +558,6 @@ export class Peer {
         while (pongs.length > idealPings)
             pongs.shift();
 
-        // Calculate the buffer size
-        const maxBuffer = Math.min(
-            1000, // No more than 1 second buffer
-            Math.max(
-                100, // No less than 100ms buffer
-
-                /* Otherwise, calculate the difference between the max and min
-                 * latency */
-                (Math.max.apply(Math, pongs) - Math.min.apply(Math, pongs))
-
-                /* and multiply it by 0.75, since that's RTT, but data is sent
-                 * one way. i.e., our ideal is 150% of the variance in one-way
-                 * latency. */
-                * 0.75
-            )
-        );
-        if (maxBuffer > this._maxBufferFromPingMs) {
-            this._maxBufferFromPingMs = maxBuffer;
-        } else {
-            this._maxBufferFromPingMs =
-                (this._maxBufferFromPingMs * 31/32) +
-                (maxBuffer / 32);
-        }
-
-
         // Inform the user
         this.room.emitEvent("peer-p2p-latency", {
             peer: this.id,
@@ -604,33 +577,6 @@ export class Peer {
         });
 
         this.ping();
-    }
-
-    /**
-     * Get the maximum buffer size for this peer.
-     * @private
-     */
-    maxBufferMs() {
-        // Ideal buffer from pings...
-        let maxBufferFromPingMs = this._maxBufferFromPingMs;
-        if (
-            this.reliability < net.Reliability.SEMIRELIABLE ||
-            !this.reliable || !this._incomingReliable ||
-            this.pongs.length < idealPings
-        ) {
-            // No reliable connection, so use the default
-            maxBufferFromPingMs = 200;
-        }
-
-        // No less than two frames
-        let minFromFrames = 0;
-        if (this.stream) {
-            minFromFrames = Math.max.apply(Math, this.stream.map(
-                x => x.frameDuration * 2 / 1000));
-        }
-
-        return Math.max(
-            maxBufferFromPingMs, this._maxBufferFromDataMs, minFromFrames);
     }
 
     /**
@@ -1011,41 +957,6 @@ export class Peer {
 
         } catch (ex) {}
 
-        // Compute our max buffer from the data we now have
-        {
-            let diffs: number[] = [];
-            for (const idata of this.data) {
-                if (!idata || idata.remoteTimestamp < 0 ||
-                    idata.arrivedTimestamp < 0)
-                    continue;
-                diffs.push(Math.abs(
-                    idata.arrivedTimestamp - idata.remoteTimestamp
-                ));
-            }
-
-            if (diffs.length) {
-                diffs.sort();
-
-                /* The buffer comes from the *range* of possible times it might
-                 * take to receive data. */
-                const maxBuffer = Math.min(
-                    1000, // No more than 1 second
-                    (diffs[diffs.length-1] - diffs[0])
-                );
-
-                /* The value we get raw is a snapshot, and doesn't include any data
-                 * we've already gone past, so if it's lower than the current
-                 * value, weight it heavily. */
-                if (maxBuffer > this._maxBufferFromDataMs) {
-                    this._maxBufferFromDataMs = maxBuffer;
-                } else {
-                    this._maxBufferFromDataMs =
-                        (this._maxBufferFromDataMs * 65535/65536) +
-                        (maxBuffer / 65536);
-                }
-            }
-        }
-
         // Decode what we can
         this.decodeMany();
 
@@ -1303,7 +1214,7 @@ export class Peer {
         for (const chunk of this.data) {
             if (!chunk)
                 continue;
-            chunk.idealTimestamp = performance.now() + 100;
+            chunk.idealTimestamp = performance.now() + 50;
             break;
         }
 
@@ -1319,23 +1230,19 @@ export class Peer {
             const currentBuffer = this._currentBuffer =
                 Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0)) / 1000;
 
-            const tooMuch = Math.max(this.maxBufferMs() * 1000, 2000000);
-
-            /* Do we have *way* too much data (more than double our max buffer,
-             * and more than 400ms)? */
-            if (currentBuffer * 1000 >= tooMuch * 2) {
+            /* Do we have *way* too much data (more than 400ms)? */
+            if (currentBuffer >= 400) {
                 while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                       >= tooMuch) {
+                       >= 100000) {
                    const chunk = this.shift(true);
                    if (chunk)
                        chunk.close();
                 }
             }
 
-            /* Do we have too much data (more than our max buffer, and more
-             * than 200ms)? */
+            /* Do we have too much data (more than 100ms)? */
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                   >= tooMuch) {
+                   >= 100000) {
                 const chunk = this.shift();
                 if (chunk)
                     chunk.close();
