@@ -1162,13 +1162,17 @@ export class Peer {
 
     /**
      * Get the next packet of data.
-     * @param force  Shift even if that means skipping a keyframe.
+     * @param opts  Shift options
      * @private
      */
-    shift(force = false) {
-        let earliestTime = 1/0;
+    shift(opts: {
+        /// Force the actually earliest frame, even if it's incomplete
+        incomplete?: boolean,
+        /// Forcibly allow dropping of keyframes
+        key?: boolean
+    } = {}) {
         let earliestTrack = -1;
-        let earliestIdx = -1;
+        let earliestIdx = 1/0;
         let earliest: IncomingData | null = null;
         let earliestComplete = false;
 
@@ -1177,13 +1181,12 @@ export class Peer {
             const trackIdx = +trackStr;
             const track = this.tracks[trackIdx];
 
-            for (let nextIdx = 0; nextIdx < trackData.length; nextIdx++) {
+            for (let nextIdx = 0;
+                 nextIdx < trackData.length && nextIdx < earliestIdx;
+                 nextIdx++) {
                 const next = trackData[nextIdx];
                 if (!next)
                     continue
-
-                if (next.remoteTimestamp >= earliestTime)
-                    break;
 
                 // next is set, but might be incomplete
                 let complete = false;
@@ -1197,19 +1200,14 @@ export class Peer {
                     }
                 }
 
-                if (!complete && !force) {
+                if (!complete && !opts.incomplete) {
+                    // Don't send this frame
                     if (next.key)
                         break; // Can't skip a keyframe
                     else
                         continue;
                 }
 
-                /* NOTE: remoteTimestamp *can* by < 0, in which case we're
-                 * treating an incomplete packet as the earliest packet. But,
-                 * the only situation where we would be there is if we're
-                 * forcing a drop, and if we're forcing a drop, we *want* to
-                 * drop incomplete packets first! */
-                earliestTime = next.remoteTimestamp;
                 earliestTrack = trackIdx;
                 earliestIdx = nextIdx;
                 earliest = next;
@@ -1219,6 +1217,10 @@ export class Peer {
         }
 
         if (!earliest)
+            return null;
+
+        // Maybe force keyframe skip
+        if (!earliestComplete && earliest.key && !opts.key)
             return null;
 
         // Remove any preceding data (skipped)
@@ -1273,10 +1275,10 @@ export class Peer {
      * @private
      */
     async play() {
-        let tsOffset = 0;
+        let tsOffset: number | null = null;
 
         // Helper function to get the ideal timestamp offset
-        const idealTSOffset = delay => {
+        const idealTSOffset = (chunk, delay) => {
             for (const chunk of this.data) {
                 if (!chunk)
                     continue;
@@ -1284,7 +1286,6 @@ export class Peer {
                 break;
             }
         };
-        idealTSOffset(50);
 
         this.playing = true;
 
@@ -1301,23 +1302,25 @@ export class Peer {
             /* Do we have *way* too much data (more than 400ms)? */
             if (currentBuffer >= 400) {
                 while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                       >= 200000) {
-                   const chunk = this.shift(true);
-                   if (chunk)
+                       >= 100000) {
+                   const chunk = this.shift({incomplete: true, key: true});
+                   if (chunk) {
+                       idealTSOffset(chunk, 0);
                        chunk.close();
+                   }
                 }
-                idealTSOffset(0);
             }
 
             /* Do we have too much data (more than 200ms)? */
             while (Math.max.apply(Math, this.tracks.map(x => x ? x.duration : 0))
-                   >= 200000) {
-                const chunk = this.shift();
-                if (chunk)
+                   >= 100000) {
+                const chunk = this.shift({incomplete: true});
+                if (chunk) {
+                    idealTSOffset(chunk, 0);
                     chunk.close();
-                else
+                } else {
                     break;
-                idealTSOffset(0);
+                }
             }
 
             // Get a chunk
@@ -1328,6 +1331,10 @@ export class Peer {
                 this.playing = false;
                 return;
             }
+
+            // Get our offset
+            if (tsOffset === null)
+                idealTSOffset(chunk, 50);
 
             // Make sure it's decoding/ed
             if (!chunk.decoding)
@@ -1340,7 +1347,7 @@ export class Peer {
                 const wait = chunk.remoteTimestamp - tsOffset - now;
                 if (wait > 500) {
                     // Something is wrong with our offsets
-                    idealTSOffset(0);
+                    idealTSOffset(chunk, 0);
                 } else if (wait > 0)
                     await new Promise(res => setTimeout(res, wait));
             }
