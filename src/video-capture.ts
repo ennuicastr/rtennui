@@ -218,7 +218,7 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
         // Adjust the width and bitrate to match
         newConfig.width = Math.round((newConfig.height / height) * width / 8) * 8;
-        newConfig.bitrate = newConfig.height * 2500;
+        newConfig.bitrate = newConfig.height * 1000;
 
         // End the old video encoder
         try {
@@ -422,7 +422,7 @@ class VideoCaptureMediaRecorder extends VideoCapture {
             this._codec = "vp8";
 
         // And bitrate
-        this._bitrate = _config.bitrate || _config.height * 2500;
+        this._bitrate = _config.bitrate || _config.height * 1000;
 
         // Framerate isn't yet known
         this._framerate = 0;
@@ -567,10 +567,10 @@ class VideoCaptureMediaRecorder extends VideoCapture {
         const height = newConfig.height;
 
         newConfig.bitrate *= enhancement;
-        if (newConfig.bitrate < 360 * 2500) // lowest allowed bitrate
-            newConfig.bitrate = 360 * 2500;
-        else if (newConfig.bitrate > height * 2500)
-            newConfig.bitrate = height * 2500;
+        if (newConfig.bitrate < 360 * 500) // lowest allowed bitrate
+            newConfig.bitrate = 360 * 500;
+        else if (newConfig.bitrate > height * 1000)
+            newConfig.bitrate = height * 1000;
         if (newConfig.bitrate === this._config.bitrate)
             return false;
 

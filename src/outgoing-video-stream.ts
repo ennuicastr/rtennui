@@ -82,12 +82,13 @@ export class OutgoingVideoStream extends events.EventEmitter {
         this._width = width;
         this._height = height;
 
-        const bitrate = this._bitrate = height * 2500;
-        this._capture = await videoCapture.createVideoCapture(this.ms, {
+        const bitrate = this._bitrate = height * 1000;
+        this._capture = await videoCapture.createVideoCapture(this.ms, <any> {
             codec: codec.slice(1),
             width: width,
             height: height,
             bitrate: bitrate,
+            bitrateMode: "constant",
             latencyMode: "realtime"
         });
         this._capture.on("data", data => this.emitEvent("data", data));
