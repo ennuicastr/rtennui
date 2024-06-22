@@ -151,7 +151,6 @@ class VideoCaptureWebCodecs extends VideoCapture {
         // Get the framerate
         const settings = _ms.getVideoTracks()[0].getSettings();
         this._framerate = settings.frameRate;
-
         // Get the initial width and height
         let width = _config.width;
         let height = _config.height;
@@ -180,15 +179,18 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
     async initEncoder() {
         const config = this._config;
+        config.framerate = this._framerate;
 
         // Set the scalability mode
-        for (const mode of ["L1T3", "L1T2", "L1T1", void 0]) {
-            config.scalabilityMode = mode;
-            try {
-                const support = await VideoEncoder.isConfigSupported(config);
-                if (support.supported)
-                    break;
-            } catch (ex) { /* just try the next mode */ }
+        if (!config.scalabilityMode) {
+            for (const mode of ["L1T3", "L1T2", "L1T1", void 0]) {
+                config.scalabilityMode = mode;
+                try {
+                    const support = await VideoEncoder.isConfigSupported(config);
+                    if (support.supported)
+                        break;
+                } catch (ex) { /* just try the next mode */ }
+            }
         }
 
         this._videoEncoder = new VideoEncoder({
