@@ -72,7 +72,6 @@ export class Peer {
         this.playing = false;
         this.stream = null;
         this.data = null;
-        this.dataByTrack = {};
         this.offset = 0;
         this.offsetByTrack = {};
 
@@ -595,7 +594,6 @@ export class Peer {
         this.promise = this.promise.then(async () => {
             this.playing = false;
             this.data = [];
-            this.dataByTrack = {};
             this.offset = 0;
             this.offsetByTrack = {};
 
@@ -891,10 +889,6 @@ export class Peer {
 
             while (this.data.length <= idxOffset)
                 this.data.push(null);
-            if (!this.dataByTrack[trackIdx])
-                this.dataByTrack[trackIdx] = [];
-            while (this.dataByTrack[trackIdx].length <= idxOffset)
-                this.dataByTrack[trackIdx].push(null);
 
             const gopIdxOffset = gopIdx - this.offset;
             if (gopIdxOffset !== idxOffset &&
@@ -903,7 +897,6 @@ export class Peer {
                  * it */
                 if (!this.data[gopIdxOffset]) {
                     this.data[gopIdxOffset] =
-                        this.dataByTrack[trackIdx][gopIdxOffset] =
                         new IncomingData(trackIdx, gopIdx, true);
                 }
             }
@@ -919,7 +912,6 @@ export class Peer {
             let idata: IncomingData = this.data[idxOffset];
             if (!idata) {
                 idata = this.data[idxOffset] =
-                    this.dataByTrack[trackIdx][idxOffset] =
                     new IncomingData(trackIdx, packetIdx, key);
             }
             if (!idata.encoded)
@@ -1176,99 +1168,76 @@ export class Peer {
         /// Forcibly allow dropping of keyframes
         key?: boolean
     } = {}) {
-        let earliestTrack = -1;
-        let earliestIdx = 1/0;
-        let earliest: IncomingData | null = null;
-        let earliestComplete = false;
+        const blocked: Record<number, boolean> = {};
+        let nextIdx = 0;
+        let next: IncomingData | null = null;
+        let complete = false;
+        for (; nextIdx < this.data.length; nextIdx++) {
+            next = this.data[nextIdx];
+            if (!next)
+                continue;
+            if (blocked[next.trackIdx])
+                continue;
 
-        for (const trackStr in this.dataByTrack) {
-            const trackData = this.dataByTrack[trackStr];
-            const trackIdx = +trackStr;
-            const track = this.tracks[trackIdx];
-
-            for (let nextIdx = 0;
-                 nextIdx < trackData.length && nextIdx < earliestIdx;
-                 nextIdx++) {
-                const next = trackData[nextIdx];
-                if (!next)
-                    continue
-
-                // next is set, but might be incomplete
-                let complete = false;
-                if (next.encoded) {
-                    complete = true;
-                    for (const part of next.encoded) {
-                        if (!part) {
-                            complete = false;
-                            break;
-                        }
+            // next is set, but might be incomplete
+            complete = false;
+            if (next.encoded) {
+                complete = true;
+                for (const part of next.encoded) {
+                    if (!part) {
+                        complete = false;
+                        break;
                     }
                 }
+            }
 
-                if (!complete && !opts.incomplete) {
-                    // Don't send this frame
-                    if (next.key)
-                        break; // Can't skip a keyframe
-                    else
+            if (!complete) {
+                if (next.key) {
+                    if (!opts.incomplete) {
+                        // Ignore this track
+                        blocked[next.trackIdx] = true;
                         continue;
-                }
+                    } else if (!opts.key) {
+                        // Don't skip this keyframe
+                        return null;
+                    }
 
-                earliestTrack = trackIdx;
-                earliestIdx = nextIdx;
-                earliest = next;
-                earliestComplete = complete;
-                break;
+                } else if (!opts.incomplete)
+                    continue;
             }
+
+            break;
         }
 
-        if (!earliest)
+        if (!next)
             return null;
 
-        // Maybe force keyframe skip
-        if (!earliestComplete && earliest.key && !opts.key)
-            return null;
-
-        // Remove any preceding data (skipped)
-        const trackData = this.dataByTrack[earliestTrack];
-        for (let idx = 0; idx < earliestIdx; idx++) {
-            const dropped = trackData[idx];
-            if (dropped) {
+        // Remove any preceding data from the same track
+        this.offsetByTrack[next.trackIdx] = next.index + 1;
+        for (let idx = 0; idx < nextIdx; idx++) {
+            const dropped = this.data[idx];
+            if (dropped && dropped.trackIdx === next.trackIdx) {
                 dropped.close();
-                trackData[idx] = null;
+                this.data[idx] = null;
             }
         }
 
-        // Remove it from the track data
-        trackData[earliestIdx] = null;
-        this.offsetByTrack[earliestTrack] = earliest.index + 1;
+        // Remove this
+        this.data[nextIdx] = null;
 
         // Possibly shift all the track data
-        while (this.data.length) {
-            let allNulls = true;
-            for (const trackStr in this.dataByTrack) {
-                if (this.dataByTrack[trackStr][0]) {
-                    allNulls = false;
-                    break;
-                }
-            }
-
-            if (!allNulls)
-                break;
-
+        while (this.data.length && this.data[0] === null) {
             this.data.shift();
             this.offset++;
-
-            for (const trackStr in this.dataByTrack)
-                this.dataByTrack[trackStr].shift();
         }
 
         // If it's incomplete, we're dropping it
-        if (!earliestComplete) {
-            earliest.close();
+        if (!complete) {
+            next.close();
             return null;
         }
 
-        return earliest;
+        return next;
     }
 
     /**
