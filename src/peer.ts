@@ -1268,34 +1268,39 @@ export class Peer {
             }
 
             // Find (adjust) the duration of the buffer
-            while (true) {
-                let lo = 0, hi = 0;
-                for (const chunk of this.data) {
-                    if (!chunk || chunk.remoteTimestamp < 0)
-                        continue;
-                    lo = chunk.remoteTimestamp;
-                    break;
-                }
-                for (let i = this.data.length - 1; i >= 0; i--) {
-                    const chunk = this.data[i];
-                    if (!chunk || chunk.remoteTimestamp < 0)
-                        continue;
-                    hi = chunk.remoteTimestamp;
-                    break;
-                }
-                const currentBuffer = this._currentBuffer = hi - lo;
+            {
+                let drop = false, dropKey = false;
+                while (true) {
+                    let lo = 0, hi = 0;
+                    for (const chunk of this.data) {
+                        if (!chunk || chunk.remoteTimestamp < 0)
+                            continue;
+                        lo = chunk.remoteTimestamp;
+                        break;
+                    }
+                    for (let i = this.data.length - 1; i >= 0; i--) {
+                        const chunk = this.data[i];
+                        if (!chunk || chunk.remoteTimestamp < 0)
+                            continue;
+                        hi = chunk.remoteTimestamp;
+                        break;
+                    }
+                    const currentBuffer = this._currentBuffer = hi - lo;
 
-                // Possibly discard some data to get the buffer size reasonable
-                if (currentBuffer >= 200) {
-                    const chunk = this.shift({
-                        incomplete: true,
-                        key: currentBuffer >= 400
-                    });
-                    if (chunk) {
-                        idealTSOffset(chunk, 0);
-                        chunk.close();
+                    // Possibly discard some data to get the buffer size reasonable
+                    drop = drop || (currentBuffer >= 200);
+                    dropKey = dropKey || (currentBuffer >= 400);
+                    if (drop && currentBuffer >= 100) {
+                        const chunk = this.shift({
+                            incomplete: true,
+                            key: dropKey
+                        });
+                        if (chunk) {
+                            idealTSOffset(chunk, 0);
+                            chunk.close();
+                        } else break;
                     } else break;
-                } else break;
+                }
             }
 
             // Get a chunk
