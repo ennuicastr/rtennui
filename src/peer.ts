@@ -1260,146 +1260,148 @@ export class Peer {
 
         this.playing = true;
 
-        while (true) {
-            if (!this.tracks) {
-                // Stream was closed
-                this.playing = false;
-                break;
-            }
-
-            // Find (adjust) the duration of the buffer
-            {
-                let drop = false, dropKey = false;
-                while (true) {
-                    let lo = 0, hi = 0;
-                    for (const chunk of this.data) {
-                        if (!chunk || chunk.remoteTimestamp < 0)
-                            continue;
-                        lo = chunk.remoteTimestamp;
-                        break;
-                    }
-                    for (let i = this.data.length - 1; i >= 0; i--) {
-                        const chunk = this.data[i];
-                        if (!chunk || chunk.remoteTimestamp < 0)
-                            continue;
-                        hi = chunk.remoteTimestamp;
-                        break;
-                    }
-                    const currentBuffer = this._currentBuffer = hi - lo;
-
-                    // Possibly discard some data to get the buffer size reasonable
-                    drop = drop || (currentBuffer >= 200);
-                    dropKey = dropKey || (currentBuffer >= 400);
-                    if (drop && currentBuffer >= 100) {
-                        const chunk = this.shift({
-                            incomplete: true,
-                            key: dropKey
-                        });
-                        if (chunk) {
-                            idealTSOffset(chunk, 0);
-                            chunk.close();
-                        } else break;
-                    } else break;
-                }
-            }
-
-            // Get a chunk
-            const chunk = this.shift();
-
-            // Are we out of data?
-            if (!chunk) {
-                this.playing = false;
-                return;
-            }
-
-            // Get our offset
-            if (tsOffset === null)
-                idealTSOffset(chunk, 50);
-
-            // Make sure it's decoding/ed
-            if (!chunk.decoding)
-                this.decodeOne(chunk, {force: true});
-
-            const now = performance.now();
-
-            {
-                // Wait until we're actually supposed to be playing this chunk
-                const wait = chunk.remoteTimestamp - tsOffset - now;
-                if (wait > 500) {
-                    // Something is wrong with our offsets
-                    idealTSOffset(chunk, 0);
-                } else if (wait > 0)
-                    await new Promise(res => setTimeout(res, wait));
-            }
-
-            // Decode and present it in the background
-            (async () => {
-                // Make sure it's decoded
-                await chunk.decodingPromise;
-                if (!chunk.decoded) {
-                    chunk.close();
-                    return;
-                }
-
-                // And play it
+        try {
+            while (true) {
                 if (!this.tracks) {
+                    // Stream was closed
+                    break;
+                }
+
+                // Find (adjust) the duration of the buffer
+                {
+                    let drop = false, dropKey = false;
+                    while (true) {
+                        let lo = 0, hi = 0;
+                        for (const chunk of this.data) {
+                            if (!chunk || chunk.remoteTimestamp < 0)
+                                continue;
+                            lo = chunk.remoteTimestamp;
+                            break;
+                        }
+                        for (let i = this.data.length - 1; i >= 0; i--) {
+                            const chunk = this.data[i];
+                            if (!chunk || chunk.remoteTimestamp < 0)
+                                continue;
+                            hi = chunk.remoteTimestamp;
+                            break;
+                        }
+                        const currentBuffer = this._currentBuffer = hi - lo;
+
+                        // Possibly discard some data to get the buffer size reasonable
+                        drop = drop || (currentBuffer >= 200);
+                        dropKey = dropKey || (currentBuffer >= 400);
+                        if (drop && currentBuffer >= 100) {
+                            const chunk = this.shift({
+                                incomplete: true,
+                                key: dropKey
+                            });
+                            if (chunk) {
+                                idealTSOffset(chunk, 0);
+                                chunk.close();
+                            } else break;
+                        } else break;
+                    }
+                }
+
+                // Get a chunk
+                const chunk = this.shift();
+
+                // Are we out of data?
+                if (!chunk)
+                    break;
+
+                // Get our offset
+                if (tsOffset === null)
+                    idealTSOffset(chunk, 50);
+
+                // Make sure it's decoding/ed
+                if (!chunk.decoding)
+                    this.decodeOne(chunk, {force: true});
+
+                const now = performance.now();
+
+                {
+                    // Wait until we're actually supposed to be playing this chunk
+                    const wait = chunk.remoteTimestamp - tsOffset - now;
+                    if (wait > 500) {
+                        // Something is wrong with our offsets
+                        idealTSOffset(chunk, 0);
+                    } else if (wait > 0)
+                        await new Promise(res => setTimeout(res, wait));
+                }
+
+                // Decode and present it in the background
+                (async () => {
+                    // Make sure it's decoded
+                    await chunk.decodingPromise;
+                    if (!chunk.decoded) {
+                        chunk.close();
+                        return;
+                    }
+
+                    // And play it
+                    if (!this.tracks) {
+                        chunk.close();
+                        return;
+                    }
+                    const track = this.tracks[chunk.trackIdx];
+                    if (!track) {
+                        // No associated track, or track not yet configured
+
+                    } else if (track.video) {
+                        // Delay display by the audio latency to keep them in sync
+                        if (this.audioLatency) {
+                            await new Promise(
+                                res => setTimeout(res, this.audioLatency));
+                        }
+
+                        await (<videoPlayback.VideoPlayback> track.player)
+                            .display(<wcp.VideoFrame> chunk.decoded);
+
+                    } else {
+                        let latency =
+                            (<weasound.AudioPlayback> track.player)
+                                .play(<Float32Array[]> chunk.decoded);
+
+                        // Only use the latency data from the first audio track
+                        if (track.firstAudioTrack) {
+                            if (latency > 500)
+                                latency = 500;
+                            if (latency > this.audioLatency) {
+                                this.audioLatency = latency;
+                            } else {
+                                this.audioLatency =
+                                    (this.audioLatency * 63 / 64) +
+                                    (latency / 64);
+                            }
+
+                            // Update speaking data
+                            if (track.speakingTimeout) {
+                                clearTimeout(track.speakingTimeout);
+                            } else {
+                                this.room.emitEvent("peer-speaking", {
+                                    peer: this.id,
+                                    speaking: true
+                                });
+                            }
+
+                            track.speakingTimeout = setTimeout(() => {
+                                this.room.emitEvent("peer-speaking", {
+                                    peer: this.id,
+                                    speaking: false
+                                });
+                                track.speakingTimeout = null;
+                            }, 1000);
+                        }
+
+                    }
+
                     chunk.close();
-                    return;
-                }
-                const track = this.tracks[chunk.trackIdx];
-                if (!track) {
-                    // No associated track, or track not yet configured
+                })();
+            }
 
-                } else if (track.video) {
-                    // Delay display by the audio latency to keep them in sync
-                    if (this.audioLatency) {
-                        await new Promise(
-                            res => setTimeout(res, this.audioLatency));
-                    }
-
-                    await (<videoPlayback.VideoPlayback> track.player)
-                        .display(<wcp.VideoFrame> chunk.decoded);
-
-                } else {
-                    let latency =
-                        (<weasound.AudioPlayback> track.player)
-                            .play(<Float32Array[]> chunk.decoded);
-
-                    // Only use the latency data from the first audio track
-                    if (track.firstAudioTrack) {
-                        if (latency > 500)
-                            latency = 500;
-                        if (latency > this.audioLatency) {
-                            this.audioLatency = latency;
-                        } else {
-                            this.audioLatency =
-                                (this.audioLatency * 63 / 64) +
-                                (latency / 64);
-                        }
-
-                        // Update speaking data
-                        if (track.speakingTimeout) {
-                            clearTimeout(track.speakingTimeout);
-                        } else {
-                            this.room.emitEvent("peer-speaking", {
-                                peer: this.id,
-                                speaking: true
-                            });
-                        }
-
-                        track.speakingTimeout = setTimeout(() => {
-                            this.room.emitEvent("peer-speaking", {
-                                peer: this.id,
-                                speaking: false
-                            });
-                            track.speakingTimeout = null;
-                        }, 1000);
-                    }
-
-                }
-
-                chunk.close();
-            })();
+        } finally {
+            this.playing = false;
         }
     }
 
