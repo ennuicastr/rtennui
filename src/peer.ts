@@ -1250,15 +1250,15 @@ export class Peer {
 
         // Helper function to get the ideal timestamp offset
         const idealTSOffset = (chunk, delay) => {
-            for (const chunk of this.data) {
-                if (!chunk)
-                    continue;
-                tsOffset = chunk.remoteTimestamp - performance.now() - delay;
-                break;
-            }
+            if (!chunk || chunk.remoteTimestamp < 0)
+                return;
+            tsOffset = chunk.remoteTimestamp - performance.now() - delay;
         };
 
         this.playing = true;
+
+        // Promise per track to keep playing in order
+        const trackPromises: Record<number, Promise<unknown>> = {};
 
         try {
             while (true) {
@@ -1318,20 +1318,19 @@ export class Peer {
                 if (!chunk.decoding)
                     this.decodeOne(chunk, {force: true});
 
-                const now = performance.now();
-
                 {
                     // Wait until we're actually supposed to be playing this chunk
-                    const wait = chunk.remoteTimestamp - tsOffset - now;
+                    const wait = chunk.remoteTimestamp - tsOffset - performance.now();
                     if (wait > 500) {
                         // Something is wrong with our offsets
                         idealTSOffset(chunk, 0);
-                    } else if (wait > 0)
-                        await new Promise(res => setTimeout(res, wait));
+                    } else if (wait > 10)
+                        await new Promise(res => setTimeout(res, wait - 10));
                 }
 
                 // Decode and present it in the background
-                (async () => {
+                const promise = trackPromises[chunk.trackIdx] || Promise.all([]);
+                trackPromises[chunk.trackIdx] = promise.catch(console.error).then(async () => {
                     // Make sure it's decoded
                     await chunk.decodingPromise;
                     if (!chunk.decoded) {
@@ -1339,29 +1338,40 @@ export class Peer {
                         return;
                     }
 
-                    // And play it
                     if (!this.tracks) {
                         chunk.close();
                         return;
                     }
                     const track = this.tracks[chunk.trackIdx];
+
+                    // We may have to wait
+                    const wait = chunk.remoteTimestamp - tsOffset - performance.now();
+
+                    // Play it
                     if (!track) {
                         // No associated track, or track not yet configured
 
                     } else if (track.video) {
-                        // Delay display by the audio latency to keep them in sync
-                        if (this.audioLatency) {
+                        // Delay for the wait time plus audio latency
+                        const lWait = Math.min(wait + this.audioLatency, 500);
+                        if (lWait > 0) {
                             await new Promise(
-                                res => setTimeout(res, this.audioLatency));
+                                res => setTimeout(res, lWait));
                         }
 
                         await (<videoPlayback.VideoPlayback> track.player)
                             .display(<wcp.VideoFrame> chunk.decoded);
 
                     } else {
-                        let latency =
-                            (<weasound.AudioPlayback> track.player)
-                                .play(<Float32Array[]> chunk.decoded);
+                        const player = <weasound.AudioPlayback> track.player;
+                        if (!player.playing()) {
+                            /* Only delay if we weren't already playing, so
+                             * that we create an initial buffer time */
+                            await new Promise(
+                                res => setTimeout(res, Math.min(wait, 500)));
+                        }
+
+                        let latency = player.play(<Float32Array[]> chunk.decoded);
 
                         // Only use the latency data from the first audio track
                         if (track.firstAudioTrack) {
@@ -1397,8 +1407,11 @@ export class Peer {
                     }
 
                     chunk.close();
-                })();
+                });
             }
+
+            for (const trackIdx in trackPromises)
+                await trackPromises[trackIdx];
 
         } finally {
             this.playing = false;
