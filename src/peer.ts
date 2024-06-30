@@ -70,6 +70,7 @@ export class Peer {
         this.closed = false;
         this.streamId = -1;
         this.playing = false;
+        this.resume = null;
         this.stream = null;
         this.data = null;
         this.offset = 0;
@@ -966,8 +967,12 @@ export class Peer {
         this.decodeMany();
 
         // And play if we should
-        if (!this.playing)
-            this.play();
+        if (!this.playing) {
+            if (this.resume)
+                this.resume();
+            else
+                this.play();
+        }
     }
 
     /**
@@ -1272,8 +1277,9 @@ export class Peer {
                     let drop = false, dropKey = false;
                     while (true) {
                         let lo = 0, hi = 0;
+                        let hiChunk: IncomingData | null = null;
                         for (const chunk of this.data) {
-                            if (!chunk || chunk.remoteTimestamp < 0)
+                            if (!chunk || chunk.key || chunk.remoteTimestamp < 0)
                                 continue;
                             lo = chunk.remoteTimestamp;
                             break;
@@ -1283,22 +1289,33 @@ export class Peer {
                             if (!chunk || chunk.remoteTimestamp < 0)
                                 continue;
                             hi = chunk.remoteTimestamp;
+                            hiChunk = chunk;
                             break;
                         }
                         const currentBuffer = this._currentBuffer = hi - lo;
 
-                        // Possibly discard some data to get the buffer size reasonable
-                        drop = drop || (currentBuffer >= 200);
-                        dropKey = dropKey || (currentBuffer >= 400);
-                        if (drop && currentBuffer >= 100) {
+                        // If the timing is way out of wack, jump ahead
+                        if (hiChunk) {
+                            if (tsOffset === null) {
+                                idealTSOffset(hiChunk, 50);
+                            } else {
+                                const hiWait = hiChunk.remoteTimestamp - tsOffset - performance.now();
+                                if (hiWait > 200 || hiWait < 0)
+                                    idealTSOffset(hiChunk, 50);
+                            }
+                        }
+
+                        // If the buffer size gets way out of hand, drop it
+                        drop = drop || (currentBuffer >= 1000);
+                        dropKey = dropKey || (currentBuffer >= 2000);
+                        if (drop && currentBuffer >= 1000) {
                             const chunk = this.shift({
                                 incomplete: true,
                                 key: dropKey
                             });
-                            if (chunk) {
-                                idealTSOffset(chunk, 0);
+                            if (chunk)
                                 chunk.close();
-                            } else break;
+                            else break;
                         } else break;
                     }
                 }
@@ -1307,8 +1324,13 @@ export class Peer {
                 const chunk = this.shift();
 
                 // Are we out of data?
-                if (!chunk)
-                    break;
+                if (!chunk) {
+                    this.playing = false;
+                    await new Promise<void>(res => this.resume = res);
+                    this.resume = null;
+                    this.playing = true;
+                    continue;
+                }
 
                 // Get our offset
                 if (tsOffset === null)
@@ -1354,7 +1376,11 @@ export class Peer {
                     } else if (track.video) {
                         // Delay for the wait time plus audio latency
                         const lWait = Math.min(wait + this.audioLatency, 500);
-                        if (lWait > 0) {
+                        if (lWait < -10) {
+                            // Blew this deadline
+                            chunk.close();
+                            return;
+                        } else if (lWait > 0) {
                             await new Promise(
                                 res => setTimeout(res, lWait));
                         }
@@ -1363,6 +1389,12 @@ export class Peer {
                             .display(<wcp.VideoFrame> chunk.decoded);
 
                     } else {
+                        if (wait < -10) {
+                            // Blew this deadline
+                            chunk.close();
+                            return;
+                        }
+
                         const player = <weasound.AudioPlayback> track.player;
                         if (!player.playing()) {
                             /* Only delay if we weren't already playing, so
@@ -1602,6 +1634,12 @@ export class Peer {
      * @private
      */
     playing: boolean;
+
+    /**
+     * A callback to resume reading the playback buffer.
+     * @private
+     */
+    resume: () => void | null;
 
     /**
      * The stream information.
