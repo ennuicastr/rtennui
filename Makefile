@@ -1,16 +1,10 @@
-SRC=\
-	src/*.ts
+all: dist/rtennui.js dist/rtennui.min.js
 
-all: rtennui.js rtennui.min.js
+dist/rtennui.js dist/rtennui.min.js: src/*.ts node_modules/.bin/tsc
+	npm run build
 
-rtennui.js: $(SRC) node_modules/.bin/browserify
-	./src/build.js > $@
-
-rtennui.min.js: rtennui.js node_modules/.bin/browserify
-	./node_modules/.bin/minify --js < $< | cat src/license.js - > $@
-
-node_modules/.bin/browserify:
+node_modules/.bin/tsc:
 	npm install
 
 clean:
-	rm -f rtennui.js rtennui.min.js
+	rm -rf dist

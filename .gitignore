@@ -1,5 +1,3 @@
 .*.swp
 node_modules
-rtennui.js
-rtennui.min.js
-src/*-js.ts
+dist
