@@ -1032,6 +1032,7 @@ export class Peer {
                 type: packet.key ? "key" : "delta",
                 timestamp: 0
             });
+            packet.track = track;
             packet.decoding = true;
             packet.decodingRes();
             return;
@@ -1107,6 +1108,7 @@ export class Peer {
         if (track.video) {
             decoder.get().then(frame => {
                 packet.decoded = <wcp.VideoFrame> frame;
+                packet.track = track;
                 packet.decodingRes();
             });
 
@@ -1156,6 +1158,7 @@ export class Peer {
 
                     packet.decoded = fframes[0].data;
                 }
+                packet.track = track;
                 packet.decodingRes();
             });
 
@@ -1370,7 +1373,7 @@ export class Peer {
                     const wait = chunk.remoteTimestamp - tsOffset - performance.now();
 
                     // Play it
-                    if (!track) {
+                    if (!track || chunk.track !== track) {
                         // No associated track, or track not yet configured
 
                     } else if (track.video) {
@@ -1401,12 +1404,6 @@ export class Peer {
                              * that we create an initial buffer time */
                             await new Promise(
                                 res => setTimeout(res, Math.min(wait, 500)));
-                        }
-
-                        const decoded = <Float32Array[]> chunk.decoded;
-                        if (!decoded || !decoded.length) {
-                            chunk.close();
-                            return;
                         }
 
                         let latency = player.play(<Float32Array[]> chunk.decoded);
@@ -1917,6 +1914,7 @@ class IncomingData {
     ) {
         this.encoded = null;
         this.decoded = null;
+        this.track = null;
         this.remoteTimestamp =
             this.arrivedTimestamp = -1;
         this.decoding = false;
@@ -1948,6 +1946,12 @@ class IncomingData {
      * @private
      */
     decoded: Float32Array[] | wcp.VideoFrame | wcp.EncodedVideoChunk;
+
+    /**
+     * The track used to decode this data.
+     * @private
+     */
+    track: Track;
 
     /**
      * The timestamp for this chunk, as specified by the sender.
