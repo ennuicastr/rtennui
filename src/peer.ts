@@ -1403,6 +1403,12 @@ export class Peer {
                                 res => setTimeout(res, Math.min(wait, 500)));
                         }
 
+                        const decoded = <Float32Array[]> chunk.decoded;
+                        if (!decoded || !decoded.length) {
+                            chunk.close();
+                            return;
+                        }
+
                         let latency = player.play(<Float32Array[]> chunk.decoded);
 
                         // Only use the latency data from the first audio track
