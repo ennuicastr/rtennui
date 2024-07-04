@@ -2056,7 +2056,6 @@ class Decoder {
 
         // And set the new decoder
         this.keyChunkRequired = true;
-        this.forceReinit = Decoder.framesPerForceReinit;
         this.decoder = dec;
     }
 
