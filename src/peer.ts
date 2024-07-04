@@ -1077,20 +1077,11 @@ export class Peer {
         // Send it for decoding
         let chunk: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk;
         if (track.video) {
-            if (decoder.keyChunkRequired && !packet.key) {
-                // Not decodable
-                packet.decodingRes();
-                return;
-
-            } else {
-                decoder.keyChunkRequired = false;
-                chunk = new decoder.envV.EncodedVideoChunk({
-                    data: unify(),
-                    type: packet.key ? "key" : "delta",
-                    timestamp: 0
-                });
-
-            }
+            chunk = new decoder.envV.EncodedVideoChunk({
+                data: unify(),
+                type: packet.key ? "key" : "delta",
+                timestamp: 0
+            });
 
         } else {
             chunk = new decoder.envA.EncodedAudioChunk({
@@ -1102,7 +1093,7 @@ export class Peer {
         }
 
         // Decode
-        decoder.decoder.decode(chunk);
+        decoder.decode(chunk);
 
         // And receive it
         if (track.video) {
@@ -2065,7 +2056,31 @@ class Decoder {
 
         // And set the new decoder
         this.keyChunkRequired = true;
+        this.forceReinit = Decoder.framesPerForceReinit;
         this.decoder = dec;
+    }
+
+    /**
+     * Pass a packet in for decoding.
+     * @private
+     */
+    async decode(chunk: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk) {
+        if (!this.decoder) {
+            this.output(null, null);
+            return;
+        }
+
+        if (this.keyChunkRequired) {
+            if (chunk.type === "key") {
+                this.keyChunkRequired = false;
+            } else {
+                this.output(this.decoder, null);
+                return;
+            }
+
+        }
+
+        this.decoder.decode(chunk);
     }
 
     /**
