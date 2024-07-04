@@ -166,6 +166,7 @@ export class VideoPlaybackVideoDecoderCanvas extends VideoPlayback {
             this._ctxib.transferFromImageBitmap(image);
         else
             this._ctx2d.drawImage(image, this._sl, this._st);
+        image.close();
     }
 
     override element() {
