@@ -876,11 +876,6 @@ export class Peer {
             if (this.data.length === 0)
                 this.offset = packetIdx;
 
-            const idxOffset = packetIdx - this.offset;
-
-            if (idxOffset < 0 || idxOffset >= 1024)
-                return;
-
             if (!(trackIdx in this.offsetByTrack))
                 this.offsetByTrack[trackIdx] = this.offset;
             if (this.offsetByTrack[trackIdx] > packetIdx) {
@@ -888,11 +883,33 @@ export class Peer {
                 return;
             }
 
+            // Make sure we have a place to put it
+            let assertIdx = packetIdx;
+            if (gopIdx >= this.offsetByTrack[trackIdx])
+                assertIdx = gopIdx;
+            if (assertIdx < this.offset) {
+                // Need to make room for it
+                if (this.offset - assertIdx >= 1024) {
+                    // Don't make that much room!
+                    return;
+                }
+                while (this.offset > assertIdx) {
+                    this.data.unshift(null);
+                    this.offset--;
+                }
+            }
+
+            const idxOffset = packetIdx - this.offset;
+
+            if (idxOffset < 0 || idxOffset >= 1024)
+                return;
+
             while (this.data.length <= idxOffset)
                 this.data.push(null);
 
             const gopIdxOffset = gopIdx - this.offset;
             if (gopIdxOffset !== idxOffset &&
+                gopIdx >= this.offsetByTrack[trackIdx] &&
                 gopIdxOffset >= 0 && gopIdxOffset < this.data.length) {
                 /* Make sure we know this packet is a keyframe so we don't skip
                  * it */
