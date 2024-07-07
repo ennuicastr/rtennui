@@ -1387,7 +1387,7 @@ export class Peer {
                     } else if (track.video) {
                         // Delay for the wait time plus audio latency
                         const lWait = Math.min(wait + this.audioLatency, 500);
-                        if (lWait < -10) {
+                        if (lWait < -1000) {
                             // Blew this deadline
                             chunk.close();
                             return;
@@ -1588,6 +1588,7 @@ export class Peer {
             /* Couldn't degrade. Either reconnect with more
              * retransmits, or abort the P2P connection entirely and
              * proxy via the server. */
+            let forceCompleteReconnect = false;
             switch (this.reliability) {
                 case net.Reliability.RELIABLE:
                     // Use a semi-reliable connection
@@ -1596,8 +1597,11 @@ export class Peer {
                         this.p2p();
                     break;
 
-                case net.Reliability.SEMIRELIABLE:
                 case net.Reliability.UNRELIABLE:
+                    forceCompleteReconnect = true;
+                    // Intentional fallthrough
+
+                case net.Reliability.SEMIRELIABLE:
                 default:
                     // Don't use any P2P connections
                     this.reliability = net.Reliability.UNRELIABLE;
@@ -1609,7 +1613,7 @@ export class Peer {
                         this.reliable.close();
                         this.reliable = null;
                     }
-                    this.p2p();
+                    this.p2p({forceCompleteReconnect});
                     break;
             }
         }
