@@ -549,9 +549,10 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         // Set up the stream
         await stream.init();
+        const forceReliable = stream.forceReliable();
         this._videoTracks.push(stream);
         this._videoTrackKeyframes.push(0);
-        stream.on("data", data => this._onOutgoingData(stream, data));
+        stream.on("data", data => this._onOutgoingData(stream, data, forceReliable));
         stream.on("error", error => this._onOutgoingError(stream, error));
         this._newOutgoingStream();
     }
@@ -593,7 +594,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         const stream = new outgoingAudioStream.OutgoingAudioStream(track);
         await stream.init(opts);
         this._audioTracks.push(stream);
-        stream.on("data", data => this._onOutgoingData(stream, data));
+        stream.on("data", data => this._onOutgoingData(stream, data, false));
         stream.on("error", error => this._onOutgoingError(stream, error));
         this._newOutgoingStream();
     }
@@ -657,9 +658,10 @@ export class Connection extends abstractRoom.AbstractRoom {
                     inVT.ms, vCodec
                 );
             await stream.init();
+            const forceReliable = stream.forceReliable();
             this._videoTracks[i] = stream;
             this._videoTrackKeyframes[i] = 0;
-            stream.on("data", data => this._onOutgoingData(stream, data));
+            stream.on("data", data => this._onOutgoingData(stream, data, forceReliable));
             stream.on("error", error => this._onOutgoingError(stream, error));
         }
 
@@ -903,7 +905,8 @@ export class Connection extends abstractRoom.AbstractRoom {
     private _onOutgoingData(
         stream: outgoingVideoStream.OutgoingVideoStream |
             outgoingAudioStream.OutgoingAudioStream,
-        data: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk
+        data: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk,
+        forceReliable: boolean
     ) {
         let isVideo = true;
         let trackIdx = this._videoTracks.indexOf(
@@ -973,11 +976,16 @@ export class Connection extends abstractRoom.AbstractRoom {
             );
 
             this._sendData(msg,
-                isVideo
-                    ? (key
-                       ? net.Reliability.RELIABLE
-                       : net.Reliability.UNRELIABLE)
-                    : net.Reliability.SEMIRELIABLE);
+                forceReliable
+                    ? net.Reliability.RELIABLE
+                    : (isVideo
+                        ? (key
+                           ? net.Reliability.RELIABLE
+                           : net.Reliability.UNRELIABLE
+                        )
+                        : net.Reliability.SEMIRELIABLE
+                    )
+            );
 
             idx++;
         }

@@ -137,6 +137,13 @@ export class OutgoingVideoStream extends events.EventEmitter {
     }
 
     /**
+     * Force all frames to be sent reliably?
+     */
+    forceReliable(): boolean {
+        return this._capture.reliableOnly();
+    }
+
+    /**
      * Close this outgoing stream.
      */
     async close() {

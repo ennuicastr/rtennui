@@ -96,6 +96,11 @@ export abstract class VideoCapture extends events.EventEmitter {
      * Get the framerate of this capture.
      */
     abstract getFramerate(): number;
+
+    /**
+     * Do all frames need to be sent reliably?
+     */
+    reliableOnly(): boolean { return false; }
 }
 
 /**
@@ -537,16 +542,9 @@ class VideoCaptureMediaRecorder extends VideoCapture {
                                 continue;
                         }
 
-                        /* Because MediaRecorder is free to use altref frames
-                         * and other mandatory frames, we have to mark
-                         * everything as a keyframe. If the decoder comes in
-                         * late, it may fail to decode, so the decoder has to be
-                         * robust against mismarked frames. Ideally, we would
-                         * just have two bits for keyframe-ness, but really,
-                         * ideally, we wouldn't be using MediaRecorder :) */
                         const evc = new LibAVWebCodecs.EncodedVideoChunk({
                             data: packet.data,
-                            type: "key",
+                            type: key ? "key" : "delta",
                             timestamp: 0
                         });
                         this.emitEvent("data", evc);
@@ -600,6 +598,10 @@ class VideoCaptureMediaRecorder extends VideoCapture {
 
     override getFramerate(): number {
         return this._framerate;
+    }
+
+    override reliableOnly(): boolean {
+        return true;
     }
 
     // Current codec as a MediaRecorder name
