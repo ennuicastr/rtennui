@@ -1225,7 +1225,7 @@ export class Peer {
             break;
         }
 
-        if (!next)
+        if (!next || nextIdx >= this.data.length)
             return null;
 
         // Remove any preceding data from the same track
@@ -1275,10 +1275,11 @@ export class Peer {
 
         // Promise per track to keep playing in order
         const trackPromises: Record<number, Promise<unknown>> = {};
+        const streamId = this.streamId;
 
         try {
             while (true) {
-                if (!this.tracks) {
+                if (!this.tracks || this.streamId !== streamId) {
                     // Stream was closed
                     break;
                 }
