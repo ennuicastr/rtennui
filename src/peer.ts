@@ -2100,7 +2100,12 @@ class Decoder {
 
         }
 
-        this.decoder.decode(chunk);
+        try {
+            this.decoder.decode(chunk);
+        } catch (ex) {
+            console.error(ex);
+            await this.init();
+        }
     }
 
     /**
