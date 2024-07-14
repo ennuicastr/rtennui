@@ -1318,8 +1318,8 @@ export class Peer {
                         }
 
                         // If the buffer size gets way out of hand, drop it
-                        drop = drop || (currentBuffer >= 1000);
-                        dropKey = dropKey || (currentBuffer >= 2000);
+                        drop = drop || (currentBuffer >= 10000);
+                        dropKey = dropKey || (currentBuffer >= 20000);
                         if (drop && currentBuffer >= 1000) {
                             const chunk = this.shift({
                                 incomplete: true,
@@ -1388,11 +1388,7 @@ export class Peer {
                     } else if (track.video) {
                         // Delay for the wait time plus audio latency
                         const lWait = Math.min(wait + this.audioLatency, 500);
-                        if (lWait < -1000) {
-                            // Blew this deadline
-                            chunk.close();
-                            return;
-                        } else if (lWait > 0) {
+                        if (lWait > 0) {
                             await new Promise(
                                 res => setTimeout(res, lWait));
                         }
