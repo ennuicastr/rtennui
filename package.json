@@ -23,7 +23,7 @@
   "dependencies": {
     "libav.js": "^4.6.6",
     "libavjs-webcodecs-polyfill": "^0.4.4",
-    "weasound": "^1.2.2"
+    "weasound": "^1.2.3"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.2.3",
