@@ -31,8 +31,8 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
 // Supported en/decoders
-let encoders: string[] = null;
-let decoders: string[] = null;
+let encoders: string[] | null = null;
+let decoders: string[] | null = null;
 
 // Amount to send per packet
 const perPacket = 61440;
@@ -91,7 +91,9 @@ export class Connection extends abstractRoom.AbstractRoom {
         } = {}
     ) {
         super();
+        this._id = -1;
         this._streamId = 0;
+        this._packetIdx = 0;
         this._videoTracks = [];
         this._videoTrackKeyframes = [];
         this._audioTracks = [];
@@ -101,6 +103,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._serverReliability = net.Reliability.RELIABLE;
         this._serverReliabilityProber = null;
         this._peers = [];
+        this._formats = [];
         this._upgradeTimer = null;
     }
 
@@ -150,7 +153,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         // Wait for it to open
         const opened = await new Promise(res => {
-            let timeout = setTimeout(() => {
+            let timeout: number | null = setTimeout(() => {
                 timeout = null;
                 res(false);
             }, 30000);
@@ -177,8 +180,8 @@ export class Connection extends abstractRoom.AbstractRoom {
             const p = prot.parts.login;
             const loginObj = {
                 credentials,
-                transmit: encoders,
-                receive: decoders
+                transmit: encoders!,
+                receive: decoders!
             };
             const data = util.encodeText(JSON.stringify(loginObj));
             const msg = net.createPacket(
@@ -262,7 +265,7 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Establish an unreliable connection to the server.
      */
     private async _connectUnreliable() {
-        let pc: RTCPeerConnection = this._serverUnreliablePC;
+        let pc: RTCPeerConnection = this._serverUnreliablePC!;
         if (!pc) {
             pc = this._serverUnreliablePC = new RTCPeerConnection({
                 iceServers: util.iceServers
@@ -284,7 +287,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                         65535, prot.ids.rtc,
                         [[p.data, descr]]
                     );
-                    this._serverReliable.send(msg);
+                    this._serverReliable!.send(msg);
 
                 } catch (ex) {
                     console.error(ex);
@@ -304,7 +307,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                     65535, prot.ids.rtc,
                     [[p.data, cand]]
                 );
-                this._serverReliable.send(msg);
+                this._serverReliable!.send(msg);
             };
         }
 
@@ -340,9 +343,12 @@ export class Connection extends abstractRoom.AbstractRoom {
         dc.addEventListener("close", () => {
             if (this._serverUnreliable === dc) {
                 this._serverUnreliable = null;
-                this._serverReliabilityProber.stop();
+                if (this._serverReliabilityProber) {
+                    this._serverReliabilityProber.stop();
+                    this._serverReliabilityProber = null;
+                }
+                this.emitEvent("server-unreliable-disconnected", {});
             }
-            this.emitEvent("server-unreliable-disconnected", {});
         }, {once: true});
 
         dc.onmessage = ev => {
@@ -355,7 +361,7 @@ export class Connection extends abstractRoom.AbstractRoom {
      * @param msg  Received message.
      */
     private async _serverRTCMessage(msg: DataView) {
-        const pc = this._serverUnreliablePC;
+        const pc = this._serverUnreliablePC!;
         const p = prot.parts.rtc;
         const dataU8 = (new Uint8Array(msg.buffer)).subarray(p.data);
         const dataS = util.decodeText(dataU8);
@@ -377,7 +383,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                         65535, prot.ids.rtc,
                         [[p.data, descr]]
                     );
-                    this._serverReliable.send(msg);
+                    this._serverReliable!.send(msg);
                 }
 
             } else if (data.candidate) {
@@ -459,15 +465,9 @@ export class Connection extends abstractRoom.AbstractRoom {
                 }
 
                 // Create the new one
-                let p2p: peer.Peer = null;
+                let p2p: peer.Peer | null = null;
                 if (status)
                     p2p = this._peers[peerId] = new peer.Peer(this, peerId);
-
-                // Or destroy the old one
-                else if (this._peers[peerId]) {
-                    this._peers[peerId].close();
-                    this._peers[peerId] = null;
-                }
 
                 // Establish P2P connections
                 if (p2p)
@@ -523,8 +523,8 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Choose a video codec.
      */
     private _chooseVideoCodec(): string {
-        let codec: string = null;
-        for (const opt of encoders) {
+        let codec: string | null = null;
+        for (const opt of encoders!) {
             if (opt[0] !== "v")
                 continue;
             if (!this._formats || this._formats.indexOf(opt) >= 0) {
@@ -564,7 +564,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     async removeVideoTrack(ms: MediaStream) {
         // Find the stream
         let idx: number;
-        let stream: outgoingVideoStream.OutgoingVideoStream;
+        let stream: outgoingVideoStream.OutgoingVideoStream | null = null;
         for (idx = 0; idx < this._videoTracks.length; idx++) {
             let str = this._videoTracks[idx];
             if (str.ms === ms) {
@@ -606,7 +606,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     async removeAudioTrack(track: weasound.AudioCapture) {
         // Find the stream
         let idx: number;
-        let stream: outgoingAudioStream.OutgoingAudioStream;
+        let stream: outgoingAudioStream.OutgoingAudioStream | null = null;
         for (idx = 0; idx < this._audioTracks.length; idx++) {
             let str = this._audioTracks[idx];
             if (str.capture === track) {
@@ -792,13 +792,13 @@ export class Connection extends abstractRoom.AbstractRoom {
          * reliable connection if the data is reliable, of course. */
         switch (reliability) {
             case net.Reliability.RELIABLE:
-                this._serverReliable.send(relayMsg.buffer);
+                this._serverReliable!.send(relayMsg.buffer);
                 break;
 
             case net.Reliability.SEMIRELIABLE:
             {
                 let sendReliable = true;
-                if (this._serverReliable.bufferedAmount >= 8192 &&
+                if (this._serverReliable!.bufferedAmount >= 8192 &&
                     this._serverUnreliable) {
                     try {
                         this._serverUnreliable.send(relayMsg.buffer);
@@ -807,14 +807,14 @@ export class Connection extends abstractRoom.AbstractRoom {
                 }
 
                 if (sendReliable) {
-                    this._serverReliable.send(relayMsg.buffer);
+                    this._serverReliable!.send(relayMsg.buffer);
                 }
                 break;
             }
 
             default: // unreliable
             {
-                let sendReliable = (this._serverReliable.bufferedAmount < 8192);
+                let sendReliable = (this._serverReliable!.bufferedAmount < 8192);
                 if (this._serverUnreliable) {
                     try {
                         this._serverUnreliable.send(relayMsg.buffer);
@@ -823,7 +823,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                 }
 
                 if (sendReliable) {
-                    this._serverReliable.send(relayMsg.buffer);
+                    this._serverReliable!.send(relayMsg.buffer);
                 }
             }
         }
@@ -864,7 +864,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._packetIdx = 0;
 
         // Get our track listing
-        const tracks = []
+        const tracks = (<any[]> [])
             .concat(this._videoTracks.map(x => ({
                 codec: x.getCodec(),
                 frameDuration: ~~(1000000 / x.getFramerate()),
@@ -887,7 +887,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                 [p.data, data]
             ]
         );
-        this._serverReliable.send(msg);
+        this._serverReliable!.send(msg);
 
         // And inform all the peer connections
         for (const peer of this._peers) {
@@ -1093,17 +1093,17 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Reliable connection to the server.
      */
-    private _serverReliable: WebSocket;
+    private _serverReliable: WebSocket | null;
 
     /**
      * The peer connection corresponding to _serverUnreliable.
      */
-    private _serverUnreliablePC: RTCPeerConnection;
+    private _serverUnreliablePC: RTCPeerConnection | null;
 
     /**
      * Unreliable connection to the server.
      */
-    private _serverUnreliable: RTCDataChannel;
+    private _serverUnreliable: RTCDataChannel | null;
 
     /**
      * Expected reliability of the *unreliable* server connection.
@@ -1113,12 +1113,12 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Prober for server reliability.
      */
-    private _serverReliabilityProber: net.ReliabilityProber;
+    private _serverReliabilityProber: net.ReliabilityProber | null;
 
     /**
      * Peers.
      */
-    private _peers: peer.Peer[];
+    private _peers: (peer.Peer | null)[];
 
     /**
      * Formats that the server accepts.

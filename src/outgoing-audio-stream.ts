@@ -46,6 +46,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
         public capture: weasound.AudioCapture
     ) {
         super();
+        this._encoder = null;
         this._sampleRate = capture.getSampleRate();
         this._sentZeroFrames = 0;
         this._frameSizeUs = 0;
@@ -172,7 +173,7 @@ export class OutgoingAudioStream extends events.EventEmitter {
     /**
      * Underlying encoder.
      */
-    private _encoder: wcp.AudioEncoder;
+    private _encoder: wcp.AudioEncoder | null;
 
     /**
      * Sample rate of the captured audio.

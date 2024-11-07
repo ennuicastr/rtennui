@@ -36,6 +36,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
         private _codec: string
     ) {
         super();
+        this._bitrate = this._width = this._height = 0;
+        this._capture = null;
     }
 
     /**
@@ -44,8 +46,8 @@ export class OutgoingVideoStream extends events.EventEmitter {
     async init() {
         const s = this.ms.getVideoTracks()[0].getSettings();
         const codec = this._codec;
-        let width = Math.round(s.width);
-        let height = Math.round(s.height);
+        let width = Math.round(s.width!);
+        let height = Math.round(s.height!);
 
         if (!width || !height) {
             /* Size not yet known. This happens in particular on Safari with
@@ -69,7 +71,7 @@ export class OutgoingVideoStream extends events.EventEmitter {
                 ve.pause();
             } catch (ex) {}
             try {
-                ve.parentNode.removeChild(ve);
+                ve.parentNode!.removeChild(ve);
             } catch (ex) {}
             ve.srcObject = null;
         }
@@ -98,7 +100,7 @@ export class OutgoingVideoStream extends events.EventEmitter {
      * (De)grade the quality.
      */
     grade(by: number) {
-        return this._capture.grade(by);
+        return this._capture!.grade(by);
     }
 
     /**
@@ -119,7 +121,7 @@ export class OutgoingVideoStream extends events.EventEmitter {
      * Get the framerate of this stream.
      */
     getFramerate() {
-        return this._capture.getFramerate();
+        return this._capture!.getFramerate();
     }
 
     /**
@@ -140,14 +142,14 @@ export class OutgoingVideoStream extends events.EventEmitter {
      * Force all frames to be sent reliably?
      */
     forceReliable(): boolean {
-        return this._capture.reliableOnly();
+        return this._capture!.reliableOnly();
     }
 
     /**
      * Close this outgoing stream.
      */
     async close() {
-        await this._capture.close();
+        await this._capture!.close();
     }
 
     private _bitrate: number;
@@ -155,5 +157,5 @@ export class OutgoingVideoStream extends events.EventEmitter {
     private _width: number;
     private _height: number;
 
-    private _capture: videoCapture.VideoCapture;
+    private _capture: videoCapture.VideoCapture | null;
 }
