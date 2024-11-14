@@ -365,18 +365,29 @@ export class Connection extends abstractRoom.AbstractRoom {
         if (!connected)
             return;
 
+        let reliabilityStr = "unreliable";
         switch (reliability) {
             case net.Reliability.RELIABLE:
+                reliabilityStr = "reliable";
                 this._serverReliableWS = conn;
                 break;
 
             case net.Reliability.SEMIRELIABLE:
+                reliabilityStr = "semireliable";
                 this._serverSemireliableWS = conn;
                 break;
 
             default: // unreliable
                 this._serverUnreliableWS = conn;
         }
+
+        this.emitEvent("server-secondary-connected", {
+            reliability: reliabilityStr
+        });
+
+        conn.onmessage = ev => {
+            this._serverMessage(ev, conn);
+        };
 
         // FIXME: Ping/pong keepalive
     }
