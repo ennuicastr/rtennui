@@ -22,6 +22,7 @@ import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as outgoingVideoStream from "./outgoing-video-stream";
 import * as peer from "./peer";
+import * as pingSocket from "./pinging-socket";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
 import * as videoCapture from "./video-capture";
@@ -153,7 +154,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         }
 
         this._serverURL = url;
-        const conn = this._serverControl = new WebSocket(url);
+        const conn = new WebSocket(url);
         conn.binaryType = "arraybuffer";
 
         // Wait for it to open
@@ -221,12 +222,15 @@ export class Connection extends abstractRoom.AbstractRoom {
         if (!connected)
             return false;
 
+        const pconn = this._serverControl =
+            new pingSocket.PingingSocket(conn);
+
         // Prepare for other messages
-        conn.addEventListener("message", ev => {
-            this._serverMessage(ev, conn);
+        pconn.addEventListener("message", ev => {
+            this._serverMessage(<MessageEvent> ev, conn);
         });
 
-        conn.addEventListener("close", ev => {
+        pconn.addEventListener("close", ev => {
             this._serverControl =
                 this._serverReliableWS =
                 this._serverSemireliableWS =
@@ -269,7 +273,7 @@ export class Connection extends abstractRoom.AbstractRoom {
             "_serverReliableWS",
             "_serverControl"
         ]) {
-            const conn = <WebSocket | RTCDataChannel | null> (
+            const conn = <pingSocket.PingingSocket | RTCDataChannel | null> (
                 (<any> this)[part]
             );
             if (!conn)
@@ -365,20 +369,22 @@ export class Connection extends abstractRoom.AbstractRoom {
         if (!connected)
             return;
 
+        const pconn = new pingSocket.PingingSocket(conn);
+
         let reliabilityStr = "unreliable";
         switch (reliability) {
             case net.Reliability.RELIABLE:
                 reliabilityStr = "reliable";
-                this._serverReliableWS = conn;
+                this._serverReliableWS = pconn;
                 break;
 
             case net.Reliability.SEMIRELIABLE:
                 reliabilityStr = "semireliable";
-                this._serverSemireliableWS = conn;
+                this._serverSemireliableWS = pconn;
                 break;
 
             default: // unreliable
-                this._serverUnreliableWS = conn;
+                this._serverUnreliableWS = pconn;
         }
 
         this.emitEvent("server-secondary-connected", {
@@ -388,8 +394,6 @@ export class Connection extends abstractRoom.AbstractRoom {
         conn.onmessage = ev => {
             this._serverMessage(ev, conn);
         };
-
-        // FIXME: Ping/pong keepalive
     }
 
     /**
@@ -579,6 +583,10 @@ export class Connection extends abstractRoom.AbstractRoom {
         const cmd = msg.getUint16(2, true);
 
         switch (cmd) {
+            case prot.ids.pong:
+                // Their pong, only informational
+                break;
+
             case prot.ids.rping:
                 // Reliability ping. Just reverse it into a pong.
                 msg.setUint16(0, this._getOwnId(), true);
@@ -980,7 +988,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                 } else {
                     const target =
                         this._serverSemireliableWS || this._serverControl!;
-                    if (target.bufferedAmount <= 8192)
+                    if (target.bufferedAmount() <= 8192)
                         target.send(relayMsg.buffer);
                 }
                 break;
@@ -996,7 +1004,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                 } else {
                     const target =
                         this._serverUnreliableWS || this._serverControl!;
-                    if (target.bufferedAmount <= 1024)
+                    if (target.bufferedAmount() <= 1024)
                         target.send(relayMsg.buffer);
                 }
             }
@@ -1272,24 +1280,24 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Control connection to the server.
      */
-    private _serverControl: WebSocket | null;
+    private _serverControl: pingSocket.PingingSocket | null;
 
     /**
      * Reliable data connection to the server.
      */
-    private _serverReliableWS: WebSocket | null;
+    private _serverReliableWS: pingSocket.PingingSocket | null;
 
     /**
      * Semireliable WebSocket connection to the server.
      */
-    private _serverSemireliableWS: WebSocket | null;
+    private _serverSemireliableWS: pingSocket.PingingSocket | null;
 
     /**
      * Unreliable WebSocket connection to the server.
      * (Of course, as a WebSocket connection, it will always be reliable, but
      * this is for unreliable data if no other connection can be established)
      */
-    private _serverUnreliableWS: WebSocket | null;
+    private _serverUnreliableWS: pingSocket.PingingSocket | null;
 
     /**
      * The peer connection corresponding to _serverUnreliableDC and
