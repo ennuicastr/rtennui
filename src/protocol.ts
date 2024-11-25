@@ -29,6 +29,8 @@ export const protocol = {
         login: 0x10,
         formats: 0x11,
         rtc: 0x12,
+        wsc: 0x13,
+        wscLogin: 0x14,
 
         // Peer and stream info
         peer: 0x20,
@@ -113,6 +115,30 @@ export const protocol = {
         rtc: {
             length: 4, // + the actual data
             data: 4
+        },
+
+        /* wsc:
+         * c->s: Request a secondary connection.
+         * s->c: Give a key for a secondary connection.
+         */
+        wsc: {
+            cs: {
+                length: 5,
+                reliability: 4 // in net.Reliability terms
+            },
+            sc: {
+                length: 13,
+                reliability: 4,
+                key: 5 // 64 bits
+            }
+        },
+
+        /* wscLogin:
+         * c->s: Establish a secondary connection.
+         */
+        wscLogin: {
+            length: 12,
+            key: 4
         },
 
         /* peer:

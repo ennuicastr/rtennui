@@ -82,7 +82,9 @@ export class VideoPlaybackVideoDecoderCanvas extends VideoPlayback {
 
         // Find the best context
         const ctxib = this._ctxib = canvas.getContext("bitmaprenderer");
-        if (!ctxib)
+        if (ctxib)
+            this._ctx2d = null;
+        else
             this._ctx2d = canvas.getContext("2d");
 
         this._iw = this._ih = this._sl = this._st = this._sw = this._sh =
@@ -165,7 +167,7 @@ export class VideoPlaybackVideoDecoderCanvas extends VideoPlayback {
         if (this._ctxib)
             this._ctxib.transferFromImageBitmap(image);
         else
-            this._ctx2d.drawImage(image, this._sl, this._st);
+            this._ctx2d!.drawImage(image, this._sl, this._st);
         image.close();
     }
 
@@ -190,12 +192,12 @@ export class VideoPlaybackVideoDecoderCanvas extends VideoPlayback {
     /**
      * The ImageBitmap context for the canvas, if applicable.
      */
-    private _ctxib: ImageBitmapRenderingContext;
+    private _ctxib: ImageBitmapRenderingContext | null;
 
     /**
      * The 2D context for the canvas.
      */
-    private _ctx2d: CanvasRenderingContext2D;
+    private _ctx2d: CanvasRenderingContext2D | null;
 
     private _iw: number;
     private _ih: number;
@@ -223,14 +225,18 @@ class VideoPlaybackMediaSource extends VideoPlayback {
 
         // Create our video element to play it
         this._el = document.createElement("video");
+
+        this._sb = null;
+        this._libav = null;
+        this._closed = false;
+
+        this._oc = this._pb = this._pts = this._pkt = 0;
     }
 
     /**
      * A VideoPlaybackMediaSource must be initialized.
      */
     async init() {
-        this._closed = false;
-
         // Start playing
         this._el.src = URL.createObjectURL(this._ms);
 
@@ -317,7 +323,7 @@ class VideoPlaybackMediaSource extends VideoPlayback {
         };
 
         // And write it
-        const libav = this._libav;
+        const libav = this._libav!;
         await libav.ff_write_multi(this._oc, this._pkt, [packet], false);
         await libav.avio_flush(this._pb);
     }
@@ -330,24 +336,24 @@ class VideoPlaybackMediaSource extends VideoPlayback {
         if (this._closed)
             return;
         this._closed = true;
-        this._libav.terminate();
+        this._libav!.terminate();
         this._ms.endOfStream();
     }
 
     // Called when libav outputs muxed data
     private onLibAVWrite(buf: Uint8Array | Int8Array) {
-        this._sb.appendBuffer(buf.buffer);
+        this._sb!.appendBuffer(buf.buffer);
     }
 
     private _closed: boolean;
 
     private _ms: MediaSource;
 
-    private _sb: SourceBuffer;
+    private _sb: SourceBuffer | null;
 
     private _el: HTMLVideoElement;
 
-    private _libav: libavT.LibAV;
+    private _libav: libavT.LibAV | null;
 
     private _oc: number;
     private _pb: number;
@@ -363,7 +369,7 @@ export async function codecSupportList(): Promise<string[]> {
         return codecSupportArr;
 
     const cs = codecSupport;
-    const csl = codecSupportArr = [];
+    const csl: string[] = codecSupportArr = [];
 
     if (typeof VideoDecoder !== "undefined") {
         // Check for what's supported *directly* by VideoDecoder
@@ -422,7 +428,7 @@ export async function codecSupportList(): Promise<string[]> {
  */
 export async function createVideoPlayback(
     codec: string, width: number, height: number
-): Promise<VideoPlayback> {
+): Promise<VideoPlayback | null> {
     switch (codecSupport[codec]) {
         case "vd":
             return new VideoPlaybackVideoDecoderCanvas();

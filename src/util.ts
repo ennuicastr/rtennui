@@ -190,8 +190,8 @@ export function supportsMediaRecorder(
         return true;
     if (typeof ms.rteSupportsMediaRecorder !== "object")
         ms.rteSupportsMediaRecorder = Object.create(null);
-    if (typeof ms.rteSupportsMediaRecorder[mimeType] === "boolean")
-        return ms.rteSupportsMediaRecorder[mimeType];
+    if (typeof ms.rteSupportsMediaRecorder![mimeType] === "boolean")
+        return ms.rteSupportsMediaRecorder![mimeType];
 
     // Need to actually try it
     try {
@@ -199,12 +199,12 @@ export function supportsMediaRecorder(
         mr.ondataavailable = () => {};
         mr.start(20);
         mr.stop();
-        ms.rteSupportsMediaRecorder[mimeType] = true;
+        ms.rteSupportsMediaRecorder![mimeType] = true;
     } catch (ex) {
-        ms.rteSupportsMediaRecorder[mimeType] = false;
+        ms.rteSupportsMediaRecorder![mimeType] = false;
     }
 
-    return ms.rteSupportsMediaRecorder[mimeType];
+    return ms.rteSupportsMediaRecorder![mimeType];
 }
 
 /**

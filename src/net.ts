@@ -65,13 +65,6 @@ export class ReliabilityProber {
          */
         public cb: (reliable:Reliability)=>unknown
     ) {
-        this.go();
-    }
-
-    /**
-     * Start probing reliability. (Do not call this. It's called by the constructor.)
-     */
-    go() {
         this.dead = false;
         this.lastReliability = null;
         this.idx = 0;
@@ -269,23 +262,23 @@ export function createPacket(
         if (typeof d[1] === "number") {
             switch (d[1]) {
                 case 0: // netint
-                    util.encodeNetInt(retU8, d[0], d[2]);
+                    util.encodeNetInt(retU8, d[0], d[2]!);
                     break;
 
                 case 1:
-                    ret.setUint8(d[0], d[2]);
+                    ret.setUint8(d[0], d[2]!);
                     break;
 
                 case 2:
-                    ret.setUint16(d[0], d[2], true);
+                    ret.setUint16(d[0], d[2]!, true);
                     break;
 
                 case 4:
-                    ret.setUint32(d[0], d[2], true);
+                    ret.setUint32(d[0], d[2]!, true);
                     break;
 
                 case 8: // float64
-                    ret.setFloat64(d[0], d[2], true);
+                    ret.setFloat64(d[0], d[2]!, true);
                     break;
 
                 default:

@@ -22,6 +22,7 @@ import * as net from "./net";
 import * as outgoingAudioStream from "./outgoing-audio-stream";
 import * as outgoingVideoStream from "./outgoing-video-stream";
 import * as peer from "./peer";
+import * as pingSocket from "./pinging-socket";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
 import * as videoCapture from "./video-capture";
@@ -31,8 +32,8 @@ import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
 
 // Supported en/decoders
-let encoders: string[] = null;
-let decoders: string[] = null;
+let encoders: string[] | null = null;
+let decoders: string[] | null = null;
 
 // Amount to send per packet
 const perPacket = 61440;
@@ -91,16 +92,23 @@ export class Connection extends abstractRoom.AbstractRoom {
         } = {}
     ) {
         super();
+        this._id = -1;
         this._streamId = 0;
+        this._packetIdx = 0;
         this._videoTracks = [];
         this._videoTrackKeyframes = [];
         this._audioTracks = [];
-        this._serverReliable = null;
-        this._serverUnreliable = null;
-        this._serverUnreliablePC = null;
+        this._serverControl = null;
+        this._serverReliableWS = null;
+        this._serverSemireliableWS = null;
+        this._serverUnreliableWS = null;
+        this._serverPC = null;
+        this._serverSemireliableDC = null;
+        this._serverUnreliableDC = null;
         this._serverReliability = net.Reliability.RELIABLE;
         this._serverReliabilityProber = null;
         this._peers = [];
+        this._formats = [];
         this._upgradeTimer = null;
     }
 
@@ -145,12 +153,13 @@ export class Connection extends abstractRoom.AbstractRoom {
                 decoders = dec;
         }
 
-        const conn = this._serverReliable = new WebSocket(url);
+        this._serverURL = url;
+        const conn = new WebSocket(url);
         conn.binaryType = "arraybuffer";
 
         // Wait for it to open
         const opened = await new Promise(res => {
-            let timeout = setTimeout(() => {
+            let timeout: number | null = setTimeout(() => {
                 timeout = null;
                 res(false);
             }, 30000);
@@ -177,8 +186,8 @@ export class Connection extends abstractRoom.AbstractRoom {
             const p = prot.parts.login;
             const loginObj = {
                 credentials,
-                transmit: encoders,
-                receive: decoders
+                transmit: encoders!,
+                receive: decoders!
             };
             const data = util.encodeText(JSON.stringify(loginObj));
             const msg = net.createPacket(
@@ -213,16 +222,26 @@ export class Connection extends abstractRoom.AbstractRoom {
         if (!connected)
             return false;
 
+        const pconn = this._serverControl =
+            new pingSocket.PingingSocket(conn);
+
         // Prepare for other messages
-        conn.addEventListener("message", ev => {
-            this._serverMessage(ev, conn);
+        pconn.addEventListener("message", ev => {
+            this._serverMessage(<MessageEvent> ev, conn);
         });
 
-        conn.addEventListener("close", ev => {
-            this._serverReliable = this._serverUnreliable =
-                this._serverUnreliablePC = null;
-            if (this._serverReliabilityProber)
+        pconn.addEventListener("close", ev => {
+            this._serverControl =
+                this._serverReliableWS =
+                this._serverSemireliableWS =
+                this._serverUnreliableWS = null;
+            this._serverPC = null;
+            this._serverSemireliableDC =
+                this._serverUnreliableDC = null;
+            if (this._serverReliabilityProber) {
                 this._serverReliabilityProber.stop();
+                this._serverReliabilityProber = null;
+            }
             for (const peer of this._peers) {
                 if (peer)
                     peer.closeStream();
@@ -232,7 +251,11 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         this.emitEvent("connected", null);
 
-        this._connectUnreliable();
+        this._connectSecondWS(net.Reliability.UNRELIABLE);
+        this._connectSecondWS(net.Reliability.SEMIRELIABLE);
+        this._connectSecondWS(net.Reliability.RELIABLE);
+        this._connectUnreliableDC();
+        this._connectSemireliableDC();
         this._upgradeTimer = setInterval(this._maybeUpgrade.bind(this), 10000);
 
         return true;
@@ -242,13 +265,21 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Disconnect from the RTEnnui server.
      */
     disconnect() {
-        if (this._serverReliable) {
-            this._serverReliable.close();
-            this._serverReliable = null;
-        }
-        if (this._serverUnreliable) {
-            this._serverUnreliable.close();
-            this._serverUnreliable = null;
+        for (const part of [
+            "_serverUnreliableDC",
+            "_serverSemireliableDC",
+            "_serverUnreliableWS",
+            "_serverSemireliableWS",
+            "_serverReliableWS",
+            "_serverControl"
+        ]) {
+            const conn = <pingSocket.PingingSocket | RTCDataChannel | null> (
+                (<any> this)[part]
+            );
+            if (!conn)
+                continue;
+            conn.close();
+            (<any> this)[part] = null;
         }
         if (this._upgradeTimer)
             clearTimeout(this._upgradeTimer);
@@ -259,54 +290,253 @@ export class Connection extends abstractRoom.AbstractRoom {
     }
 
     /**
-     * Establish an unreliable connection to the server.
+     * Send the initial handshake to establish a secondary connection at this
+     * reliability.
      */
-    private async _connectUnreliable() {
-        let pc: RTCPeerConnection = this._serverUnreliablePC;
-        if (!pc) {
-            pc = this._serverUnreliablePC = new RTCPeerConnection({
-                iceServers: util.iceServers
+    private _connectSecondWS(reliability: net.Reliability) {
+        const p = prot.parts.wsc.cs;
+        const msg = net.createPacket(
+            p.length,
+            65535, prot.ids.wsc,
+            [[p.reliability, 1, reliability]]
+        );
+        this._serverControl!.send(msg);
+    }
+
+    /**
+     * Given a server wsc message, establish the secondary connection.
+     */
+    private async _connectSecondWSResponse(msg: DataView) {
+        const msgu8 = new Uint8Array(msg.buffer);
+        const p = prot.parts.wsc.sc;
+        const reliability = <net.Reliability> msg.getUint8(p.reliability);
+        const key = msgu8.slice(p.key, p.key + 8);
+
+        const conn = new WebSocket(this._serverURL!);
+        conn.binaryType = "arraybuffer";
+
+        // Wait for it to open
+        const opened = await new Promise(res => {
+            let timeout: number | null = setTimeout(() => {
+                timeout = null;
+                res(false);
+            }, 30000);
+            conn.addEventListener("open", ev => {
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = null;
+                    res(true);
+                }
+            }, {once: true});
+            conn.addEventListener("close", ev => {
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = null;
+                    res(false);
+                }
+            }, {once: true});
+        });
+        if (!opened)
+            return;
+
+        // Send the key and await a login ack
+        {
+            const p = prot.parts.wscLogin;
+            const msg = net.createPacket(
+                p.length,
+                65535, prot.ids.wscLogin,
+                [[p.key, key]]
+            );
+            conn.send(msg);
+        }
+
+        const connected = await new Promise(res => {
+            let done = false;
+            conn.addEventListener("message", ev => {
+                if (done)
+                    return;
+                done = true;
+
+                const msg = new DataView(ev.data);
+                res(msg.getUint16(2, true) === prot.ids.ack);
+            }, {once: true});
+
+            conn.addEventListener("close", ev => {
+                done = done || (res(false), true);
+            }, {once: true});
+        });
+
+        if (!connected)
+            return;
+
+        const pconn = new pingSocket.PingingSocket(conn);
+
+        let haveDC = false;
+        let reliabilityStr = "unreliable";
+        switch (reliability) {
+            case net.Reliability.RELIABLE:
+                reliabilityStr = "reliable";
+                this._serverReliableWS = pconn;
+                break;
+
+            case net.Reliability.SEMIRELIABLE:
+                reliabilityStr = "semireliable";
+                this._serverSemireliableWS = pconn;
+                haveDC = !!this._serverSemireliableDC;
+                break;
+
+            default: // unreliable
+                this._serverUnreliableWS = pconn;
+                haveDC = !!this._serverUnreliableDC;
+        }
+
+        if (haveDC) {
+            // Don't need both
+            pconn.close();
+            if (this._serverReliableWS === pconn)
+                this._serverReliableWS = null;
+            if (this._serverSemireliableWS === pconn)
+                this._serverSemireliableWS = null;
+            if (this._serverUnreliableWS === pcon)
+                this._serverUnreliableWS = null;
+            return;
+        }
+
+        this.emitEvent("server-secondary-connected", {
+            reliability: reliabilityStr
+        });
+
+        conn.addEventListener("close", ev => {
+            let haveDC = false;
+            switch (reliability) {
+                case net.Reliability.RELIABLE:
+                    // No reliable DC
+                    if (this._serverReliableWS !== pconn)
+                        return;
+                    break;
+
+                case net.Reliability.SEMIRELIABLE:
+                    if (this._serverSemireliableWS !== pconn)
+                        return;
+                    haveDC = !!this._serverSemireliableDC;
+                    break;
+
+                default: // unreliable
+                    if (this._serverUnreliableWS !== pconn)
+                        return;
+                    haveDC = !!this._serverUnreliableDC;
+            }
+
+            this.emitEvent("server-secondary-disconnected", {
+                reliability: reliabilityStr
             });
 
-            // Perfect negotiation logic (we're always polite)
-            pc.onnegotiationneeded = async () => {
-                try {
-                    await pc.setLocalDescription();
+            if (!haveDC)
+                this._connectSecondWS(reliability);
+        });
 
-                    const descr = util.encodeText(
-                        JSON.stringify({
-                            description: pc.localDescription
-                        })
-                    );
-                    const p = prot.parts.rtc;
-                    const msg = net.createPacket(
-                        p.length + descr.length,
-                        65535, prot.ids.rtc,
-                        [[p.data, descr]]
-                    );
-                    this._serverReliable.send(msg);
+        conn.onmessage = ev => {
+            this._serverMessage(ev, conn);
+        };
+    }
 
-                } catch (ex) {
-                    console.error(ex);
+    /**
+     * Establish an RTC peer connection to the server.
+     */
+    private async _connectRTCPC() {
+        if (this._serverPC)
+            return this._serverPC;
 
-                }
-            };
+        const pc = this._serverPC = new RTCPeerConnection({
+            iceServers: util.iceServers
+        });
 
-            pc.onicecandidate = ev => {
-                const cand = util.encodeText(
+        // Perfect negotiation logic (we're always polite)
+        pc.onnegotiationneeded = async () => {
+            try {
+                await pc.setLocalDescription();
+
+                const descr = util.encodeText(
                     JSON.stringify({
-                        candidate: ev.candidate
+                        description: pc.localDescription
                     })
                 );
                 const p = prot.parts.rtc;
                 const msg = net.createPacket(
-                    p.length + cand.length,
+                    p.length + descr.length,
                     65535, prot.ids.rtc,
-                    [[p.data, cand]]
+                    [[p.data, descr]]
                 );
-                this._serverReliable.send(msg);
-            };
-        }
+                this._serverControl!.send(msg);
+
+            } catch (ex) {
+                console.error(ex);
+
+            }
+        };
+
+        pc.onicecandidate = ev => {
+            const cand = util.encodeText(
+                JSON.stringify({
+                    candidate: ev.candidate
+                })
+            );
+            const p = prot.parts.rtc;
+            const msg = net.createPacket(
+                p.length + cand.length,
+                65535, prot.ids.rtc,
+                [[p.data, cand]]
+            );
+            this._serverControl!.send(msg);
+        };
+
+        return pc;
+    }
+
+    /**
+     * Establish a semireliable connection to the server.
+     */
+    private async _connectSemireliableDC() {
+        const pc = await this._connectRTCPC();
+
+        // Set up the actual data channel
+        const dc = pc.createDataChannel("semireliable", {
+            ordered: false,
+            maxRetransmits: 1
+        });
+        dc.binaryType = "arraybuffer";
+
+        dc.addEventListener("open", () => {
+            this._serverSemireliableDC = dc;
+            this.emitEvent("server-semireliable-connected", {});
+
+            if (this._serverSemireliableWS) {
+                // Don't need both
+                this._serverSemireliableWS.close();
+            }
+        }, {once: true});
+
+        dc.addEventListener("close", () => {
+            if (this._serverSemireliableDC === dc) {
+                this._serverSemireliableDC = null;
+                this.emitEvent("server-semireliable-disconnected", {});
+
+                if (!this._serverSemireliableWS)
+                    this._connectSecondWS(net.Reliability.SEMIRELIABLE);
+                this._connectSemireliableDC();
+            }
+        }, {once: true});
+
+        dc.onmessage = ev => {
+            this._serverMessage(ev, dc);
+        };
+    }
+
+    /**
+     * Establish an unreliable connection to the server.
+     */
+    private async _connectUnreliableDC() {
+        const pc = await this._connectRTCPC();
 
         // Set up the actual data channel
         const dc = pc.createDataChannel("unreliable", {
@@ -316,7 +546,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         dc.binaryType = "arraybuffer";
 
         dc.addEventListener("open", () => {
-            this._serverUnreliable = dc;
+            this._serverUnreliableDC = dc;
             this._serverReliability = net.Reliability.RELIABLE;
             this._serverReliabilityProber = new net.ReliabilityProber(
                 dc, true,
@@ -335,14 +565,26 @@ export class Connection extends abstractRoom.AbstractRoom {
             this.emitEvent("server-unreliable-connected", {
                 reliability: "reliable"
             });
+
+            if (this._serverUnreliableWS) {
+                // Don't need both
+                this._serverUnreliableWS.close();
+            }
         }, {once: true});
 
         dc.addEventListener("close", () => {
-            if (this._serverUnreliable === dc) {
-                this._serverUnreliable = null;
-                this._serverReliabilityProber.stop();
+            if (this._serverUnreliableDC === dc) {
+                this._serverUnreliableDC = null;
+                if (this._serverReliabilityProber) {
+                    this._serverReliabilityProber.stop();
+                    this._serverReliabilityProber = null;
+                }
+                this.emitEvent("server-unreliable-disconnected", {});
+
+                if (!this._serverUnreliableWS)
+                    this._connectSecondWS(net.Reliability.UNRELIABLE);
+                this._connectUnreliableDC();
             }
-            this.emitEvent("server-unreliable-disconnected", {});
         }, {once: true});
 
         dc.onmessage = ev => {
@@ -355,7 +597,7 @@ export class Connection extends abstractRoom.AbstractRoom {
      * @param msg  Received message.
      */
     private async _serverRTCMessage(msg: DataView) {
-        const pc = this._serverUnreliablePC;
+        const pc = this._serverPC!;
         const p = prot.parts.rtc;
         const dataU8 = (new Uint8Array(msg.buffer)).subarray(p.data);
         const dataS = util.decodeText(dataU8);
@@ -377,7 +619,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                         65535, prot.ids.rtc,
                         [[p.data, descr]]
                     );
-                    this._serverReliable.send(msg);
+                    this._serverControl!.send(msg);
                 }
 
             } else if (data.candidate) {
@@ -403,6 +645,10 @@ export class Connection extends abstractRoom.AbstractRoom {
         const cmd = msg.getUint16(2, true);
 
         switch (cmd) {
+            case prot.ids.pong:
+                // Their pong, only informational
+                break;
+
             case prot.ids.rping:
                 // Reliability ping. Just reverse it into a pong.
                 msg.setUint16(0, this._getOwnId(), true);
@@ -442,6 +688,10 @@ export class Connection extends abstractRoom.AbstractRoom {
                 }
                 break;
 
+            case prot.ids.wsc:
+                this._connectSecondWSResponse(msg);
+                break;
+
             case prot.ids.peer:
             {
                 const p = prot.parts.peer;
@@ -459,15 +709,9 @@ export class Connection extends abstractRoom.AbstractRoom {
                 }
 
                 // Create the new one
-                let p2p: peer.Peer = null;
+                let p2p: peer.Peer | null = null;
                 if (status)
                     p2p = this._peers[peerId] = new peer.Peer(this, peerId);
-
-                // Or destroy the old one
-                else if (this._peers[peerId]) {
-                    this._peers[peerId].close();
-                    this._peers[peerId] = null;
-                }
 
                 // Establish P2P connections
                 if (p2p)
@@ -523,8 +767,8 @@ export class Connection extends abstractRoom.AbstractRoom {
      * Choose a video codec.
      */
     private _chooseVideoCodec(): string {
-        let codec: string = null;
-        for (const opt of encoders) {
+        let codec: string | null = null;
+        for (const opt of encoders!) {
             if (opt[0] !== "v")
                 continue;
             if (!this._formats || this._formats.indexOf(opt) >= 0) {
@@ -564,7 +808,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     async removeVideoTrack(ms: MediaStream) {
         // Find the stream
         let idx: number;
-        let stream: outgoingVideoStream.OutgoingVideoStream;
+        let stream: outgoingVideoStream.OutgoingVideoStream | null = null;
         for (idx = 0; idx < this._videoTracks.length; idx++) {
             let str = this._videoTracks[idx];
             if (str.ms === ms) {
@@ -606,7 +850,7 @@ export class Connection extends abstractRoom.AbstractRoom {
     async removeAudioTrack(track: weasound.AudioCapture) {
         // Find the stream
         let idx: number;
-        let stream: outgoingAudioStream.OutgoingAudioStream;
+        let stream: outgoingAudioStream.OutgoingAudioStream | null = null;
         for (idx = 0; idx < this._audioTracks.length; idx++) {
             let str = this._audioTracks[idx];
             if (str.capture === track) {
@@ -792,38 +1036,38 @@ export class Connection extends abstractRoom.AbstractRoom {
          * reliable connection if the data is reliable, of course. */
         switch (reliability) {
             case net.Reliability.RELIABLE:
-                this._serverReliable.send(relayMsg.buffer);
+                if (this._serverReliableWS)
+                    this._serverReliableWS.send(relayMsg.buffer);
+                else
+                    this._serverControl!.send(relayMsg.buffer);
                 break;
 
             case net.Reliability.SEMIRELIABLE:
-            {
-                let sendReliable = true;
-                if (this._serverReliable.bufferedAmount >= 8192 &&
-                    this._serverUnreliable) {
+                if (this._serverSemireliableDC) {
                     try {
-                        this._serverUnreliable.send(relayMsg.buffer);
-                        sendReliable = false;
+                        this._serverSemireliableDC.send(relayMsg.buffer);
                     } catch (ex) {}
-                }
-
-                if (sendReliable) {
-                    this._serverReliable.send(relayMsg.buffer);
+                } else {
+                    const target =
+                        this._serverSemireliableWS || this._serverControl!;
+                    if (target.bufferedAmount() <= 8192)
+                        target.send(relayMsg.buffer);
                 }
                 break;
-            }
 
             default: // unreliable
             {
-                let sendReliable = (this._serverReliable.bufferedAmount < 8192);
-                if (this._serverUnreliable) {
+                const rtcTarget =
+                    this._serverUnreliableDC || this._serverSemireliableDC;
+                if (rtcTarget) {
                     try {
-                        this._serverUnreliable.send(relayMsg.buffer);
-                        sendReliable = false;
+                        rtcTarget.send(relayMsg.buffer);
                     } catch (ex) {}
-                }
-
-                if (sendReliable) {
-                    this._serverReliable.send(relayMsg.buffer);
+                } else {
+                    const target =
+                        this._serverUnreliableWS || this._serverControl!;
+                    if (target.bufferedAmount() <= 1024)
+                        target.send(relayMsg.buffer);
                 }
             }
         }
@@ -864,7 +1108,7 @@ export class Connection extends abstractRoom.AbstractRoom {
         this._packetIdx = 0;
 
         // Get our track listing
-        const tracks = []
+        const tracks = (<any[]> [])
             .concat(this._videoTracks.map(x => ({
                 codec: x.getCodec(),
                 frameDuration: ~~(1000000 / x.getFramerate()),
@@ -887,7 +1131,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                 [p.data, data]
             ]
         );
-        this._serverReliable.send(msg);
+        this._serverControl!.send(msg);
 
         // And inform all the peer connections
         for (const peer of this._peers) {
@@ -1056,8 +1300,8 @@ export class Connection extends abstractRoom.AbstractRoom {
     override _getPacketIdx() { return this._packetIdx; }
     /** @private */
     override _sendServer(msg: ArrayBuffer) {
-        if (this._serverReliable)
-            this._serverReliable.send(msg);
+        if (this._serverControl)
+            this._serverControl.send(msg);
     }
 
     /**
@@ -1091,19 +1335,47 @@ export class Connection extends abstractRoom.AbstractRoom {
     private _audioTracks: outgoingAudioStream.OutgoingAudioStream[];
 
     /**
-     * Reliable connection to the server.
+     * The URL that we connected to the WebSocket server with.
      */
-    private _serverReliable: WebSocket;
+    private _serverURL?: string;
 
     /**
-     * The peer connection corresponding to _serverUnreliable.
+     * Control connection to the server.
      */
-    private _serverUnreliablePC: RTCPeerConnection;
+    private _serverControl: pingSocket.PingingSocket | null;
+
+    /**
+     * Reliable data connection to the server.
+     */
+    private _serverReliableWS: pingSocket.PingingSocket | null;
+
+    /**
+     * Semireliable WebSocket connection to the server.
+     */
+    private _serverSemireliableWS: pingSocket.PingingSocket | null;
+
+    /**
+     * Unreliable WebSocket connection to the server.
+     * (Of course, as a WebSocket connection, it will always be reliable, but
+     * this is for unreliable data if no other connection can be established)
+     */
+    private _serverUnreliableWS: pingSocket.PingingSocket | null;
+
+    /**
+     * The peer connection corresponding to _serverUnreliableDC and
+     * _serverSemireliableDC.
+     */
+    private _serverPC: RTCPeerConnection | null;
+
+    /**
+     * Semireliable connection to the server.
+     */
+    private _serverSemireliableDC: RTCDataChannel | null;
 
     /**
      * Unreliable connection to the server.
      */
-    private _serverUnreliable: RTCDataChannel;
+    private _serverUnreliableDC: RTCDataChannel | null;
 
     /**
      * Expected reliability of the *unreliable* server connection.
@@ -1113,12 +1385,12 @@ export class Connection extends abstractRoom.AbstractRoom {
     /**
      * Prober for server reliability.
      */
-    private _serverReliabilityProber: net.ReliabilityProber;
+    private _serverReliabilityProber: net.ReliabilityProber | null;
 
     /**
      * Peers.
      */
-    private _peers: peer.Peer[];
+    private _peers: (peer.Peer | null)[];
 
     /**
      * Formats that the server accepts.

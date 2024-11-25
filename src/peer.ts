@@ -37,7 +37,7 @@ const dropForgetTimeout = 5000;
  * A single libav instance used to resample.
  * @private
  */
-let resampler: libavT.LibAV = null;
+let resampler: libavT.LibAV | null = null;
 
 export async function load() {
     resampler = await LibAV.LibAV();
@@ -103,7 +103,10 @@ export class Peer {
             return;
         this.closed = true;
         this.closeStream();
-        clearInterval(this._inAckInterval);
+        if (this._inAckInterval) {
+            clearInterval(this._inAckInterval);
+            this._inAckInterval = null;
+        }
         this.promise = this.promise.then(async () => {
             if (this.rtc) {
                 this.rtc.close();
@@ -304,11 +307,11 @@ export class Peer {
         label: string, options: any, onclose: (chan: RTCDataChannel) => unknown
     ): Promise<RTCDataChannel> {
         return new Promise((res, rej) => {
-            const chan = this.rtc.createDataChannel(label, options);
+            const chan = this.rtc!.createDataChannel(label, options);
             chan.binaryType = "arraybuffer";
             let opened = false;
 
-            let connTimeout = setTimeout(() => {
+            let connTimeout: number | null = setTimeout(() => {
                 // Failed to connect in time!
                 connTimeout = null;
                 this.reliability = net.Reliability.UNRELIABLE;
@@ -379,7 +382,7 @@ export class Peer {
                 return;
 
             // Perfect negotiation pattern
-            const peer: RTCPeerConnection = this.rtc;
+            const peer: RTCPeerConnection = this.rtc!;
             try {
                 if (msg.description) {
                     const offerCollision =
@@ -462,7 +465,7 @@ export class Peer {
                     // Retry *once*
                     setTimeout(() => {
                         try {
-                            this.reliable.send(msg.buffer);
+                            this.reliable!.send(msg.buffer);
                         } catch (ex) {
                             console.error(ex);
                         }
@@ -540,7 +543,7 @@ export class Peer {
             // Retry *once*
             setTimeout(() => {
                 try {
-                    this.reliable.send(msg);
+                    this.reliable!.send(msg);
                 } catch (ex) {
                     console.error(ex);
                 }
@@ -598,7 +601,7 @@ export class Peer {
             this.offset = 0;
             this.offsetByTrack = {};
 
-            const tracks: Track[] =
+            const tracks: (Track | null)[] =
                 info.map(() => new Track);
 
             this.room.emitEvent("stream-started", {
@@ -609,7 +612,7 @@ export class Peer {
             let firstAudioTrack = true;
             for (let i = 0; i < tracks.length; i++) {
                 const trackInfo = info[i];
-                const track = tracks[i];
+                const track = tracks[i]!;
 
                 if (trackInfo.codec[0] === "v") {
                     // Video track
@@ -628,7 +631,7 @@ export class Peer {
                     const config: wcp.VideoDecoderConfig = {
                         codec: wcCodec
                     };
-                    let env: wcp.VideoDecoderEnvironment = null;
+                    let env: wcp.VideoDecoderEnvironment | null = null;
                     try {
                         env = await LibAVWebCodecs.getVideoDecoder(config);
                     } catch (ex) {}
@@ -675,14 +678,14 @@ export class Peer {
                         sampleRate: 48000,
                         numberOfChannels: 1
                     };
-                    let env: wcp.AudioDecoderEnvironment = null;
+                    let env: wcp.AudioDecoderEnvironment | null = null;
                     try {
                         env = await LibAVWebCodecs.getAudioDecoder(config);
                     } catch (ex) {}
                     if (!env) continue;
 
                     // Set up the player
-                    let player: weasound.AudioPlayback = null;
+                    let player: weasound.AudioPlayback | null = null;
                     if (opts.createAudioPlayback)
                         player = await opts.createAudioPlayback(ac);
                     if (!player)
@@ -703,15 +706,15 @@ export class Peer {
 
                     // Set up the resampler
                     const pChannels = player.channels();
-                    track.resampler = await resampler.ff_init_filter_graph(
+                    track.resampler = await resampler!.ff_init_filter_graph(
                         "anull",
                         {
-                            sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
+                            sample_fmt: resampler!.AV_SAMPLE_FMT_FLTP,
                             sample_rate: 48000,
                             channel_layout: 4
                         },
                         {
-                            sample_fmt: resampler.AV_SAMPLE_FMT_FLTP,
+                            sample_fmt: resampler!.AV_SAMPLE_FMT_FLTP,
                             sample_rate: ac.sampleRate,
                             channel_layout:
                                 (pChannels === 1)
@@ -719,7 +722,7 @@ export class Peer {
                                 : ((1<<pChannels)-1)
                         }
                     );
-                    track.framePtr = await resampler.av_frame_alloc();
+                    track.framePtr = await resampler!.av_frame_alloc();
 
                     track.firstAudioTrack = firstAudioTrack;
                     firstAudioTrack = false;
@@ -747,6 +750,9 @@ export class Peer {
                 return;
 
             this.streamId = -1;
+
+            if (!this.tracks)
+                return;
 
             for (let i = 0; i < this.tracks.length; i++) {
                 const track = this.tracks[i];
@@ -776,9 +782,9 @@ export class Peer {
                     await track.decoder.decoder.close();
 
                 if (track.resampler)
-                    await resampler.avfilter_graph_free_js(track.resampler[0]);
+                    await resampler!.avfilter_graph_free_js(track.resampler[0]);
                 if (track.framePtr)
-                    await resampler.av_frame_free_js(track.framePtr);
+                    await resampler!.av_frame_free_js(track.framePtr);
             }
             this.tracks = null;
 
@@ -873,7 +879,7 @@ export class Peer {
             const packetIdx = util.decodeNetInt(datau8, offset);
             const gopIdx = packetIdx - util.decodeNetInt(datau8, offset);
 
-            if (this.data.length === 0)
+            if (this.data!.length === 0)
                 this.offset = packetIdx;
 
             if (!(trackIdx in this.offsetByTrack))
@@ -894,7 +900,7 @@ export class Peer {
                     return;
                 }
                 while (this.offset > assertIdx) {
-                    this.data.unshift(null);
+                    this.data!.unshift(null);
                     this.offset--;
                 }
             }
@@ -904,17 +910,17 @@ export class Peer {
             if (idxOffset < 0 || idxOffset >= 1024)
                 return;
 
-            while (this.data.length <= idxOffset)
-                this.data.push(null);
+            while (this.data!.length <= idxOffset)
+                this.data!.push(null);
 
             const gopIdxOffset = gopIdx - this.offset;
             if (gopIdxOffset !== idxOffset &&
                 gopIdx >= this.offsetByTrack[trackIdx] &&
-                gopIdxOffset >= 0 && gopIdxOffset < this.data.length) {
+                gopIdxOffset >= 0 && gopIdxOffset < this.data!.length) {
                 /* Make sure we know this packet is a keyframe so we don't skip
                  * it */
-                if (!this.data[gopIdxOffset]) {
-                    this.data[gopIdxOffset] =
+                if (!this.data![gopIdxOffset]) {
+                    this.data![gopIdxOffset] =
                         new IncomingData(trackIdx, gopIdx, true);
                 }
             }
@@ -927,9 +933,9 @@ export class Peer {
                 timestamp = util.decodeNetInt(datau8, offset);
 
             // Make the surrounding structure
-            let idata: IncomingData = this.data[idxOffset];
+            let idata: IncomingData = this.data![idxOffset]!;
             if (!idata) {
-                idata = this.data[idxOffset] =
+                idata = this.data![idxOffset] =
                     new IncomingData(trackIdx, packetIdx, key);
             }
             if (!idata.encoded)
@@ -997,7 +1003,7 @@ export class Peer {
      * @private
      */
     decodeMany() {
-        for (const packet of this.data) {
+        for (const packet of this.data!) {
             // If we don't have this packet, we can't decode past it
             if (!packet || !packet.encoded)
                 break;
@@ -1031,12 +1037,13 @@ export class Peer {
     decodeOne(packet: IncomingData, opts: {
         force?: boolean
     } = {}) {
-        const track = this.tracks[packet.trackIdx];
+        const track = this.tracks![packet.trackIdx];
 
         // No decoder, no decode
         if (!track) {
             packet.decoding = true;
-            packet.decodingRes();
+            if (packet.decodingRes)
+                packet.decodingRes();
             return;
         }
 
@@ -1051,7 +1058,8 @@ export class Peer {
             });
             packet.track = track;
             packet.decoding = true;
-            packet.decodingRes();
+            if (packet.decodingRes)
+                packet.decodingRes();
             return;
         }
 
@@ -1064,7 +1072,8 @@ export class Peer {
             if (opts.force) {
                 // Just mark it as done
                 packet.decoding = true;
-                packet.decodingRes();
+                if (packet.decodingRes)
+                    packet.decodingRes();
             }
             return;
         }
@@ -1079,12 +1088,12 @@ export class Peer {
 
         // Function to unify the encoded parts
         function unify() {
-            if (packet.encoded.length === 1)
-                return packet.encoded[0];
+            if (packet.encoded!.length === 1)
+                return packet.encoded![0];
             const ret = new Uint8Array(
-                packet.encoded.map(x => x.length).reduce((a, b) => a + b));
+                packet.encoded!.map(x => x.length).reduce((a, b) => a + b));
             let idx = 0;
-            for (const part of packet.encoded) {
+            for (const part of packet.encoded!) {
                 ret.set(part, idx);
                 idx += part.length;
             }
@@ -1094,14 +1103,14 @@ export class Peer {
         // Send it for decoding
         let chunk: wcp.EncodedVideoChunk | wcp.EncodedAudioChunk;
         if (track.video) {
-            chunk = new decoder.envV.EncodedVideoChunk({
+            chunk = new decoder.envV!.EncodedVideoChunk({
                 data: unify(),
                 type: packet.key ? "key" : "delta",
                 timestamp: 0
             });
 
         } else {
-            chunk = new decoder.envA.EncodedAudioChunk({
+            chunk = new decoder.envA!.EncodedAudioChunk({
                 data: unify(),
                 type: "key",
                 timestamp: 0
@@ -1117,14 +1126,16 @@ export class Peer {
             decoder.get().then(frame => {
                 packet.decoded = <wcp.VideoFrame> frame;
                 packet.track = track;
-                packet.decodingRes();
+                if (packet.decodingRes)
+                    packet.decodingRes();
             });
 
         } else {
             decoder.get().then(async halfDecoded => {
                 if (!halfDecoded) {
                     // Failed!
-                    packet.decodingRes();
+                    if (packet.decodingRes)
+                        packet.decodingRes();
                     return;
                 }
 
@@ -1140,7 +1151,7 @@ export class Peer {
 
                 const frame: libavT.Frame = {
                     data: [buf],
-                    format: resampler.AV_SAMPLE_FMT_FLTP,
+                    format: resampler!.AV_SAMPLE_FMT_FLTP,
                     sample_rate: 48000,
                     channel_layout: 4,
                     pts: decoder.pts,
@@ -1150,9 +1161,9 @@ export class Peer {
 
                 // Resample it
                 const fframes =
-                    await resampler.ff_filter_multi(
-                        track.resampler[1],
-                        track.resampler[2],
+                    await resampler!.ff_filter_multi(
+                        track.resampler![1],
+                        track.resampler![2],
                         track.framePtr,
                         [frame]
                     );
@@ -1167,7 +1178,8 @@ export class Peer {
                     packet.decoded = fframes[0].data;
                 }
                 packet.track = track;
-                packet.decodingRes();
+                if (packet.decodingRes)
+                    packet.decodingRes();
             });
 
         }
@@ -1188,8 +1200,8 @@ export class Peer {
         let nextIdx = 0;
         let next: IncomingData | null = null;
         let complete = false;
-        for (; nextIdx < this.data.length; nextIdx++) {
-            next = this.data[nextIdx];
+        for (; nextIdx < this.data!.length; nextIdx++) {
+            next = this.data![nextIdx];
             if (!next)
                 continue;
             if (blocked[next.trackIdx])
@@ -1225,25 +1237,25 @@ export class Peer {
             break;
         }
 
-        if (!next || nextIdx >= this.data.length)
+        if (!next || nextIdx >= this.data!.length)
             return null;
 
         // Remove any preceding data from the same track
         this.offsetByTrack[next.trackIdx] = next.index + 1;
         for (let idx = 0; idx < nextIdx; idx++) {
-            const dropped = this.data[idx];
+            const dropped = this.data![idx];
             if (dropped && dropped.trackIdx === next.trackIdx) {
                 dropped.close();
-                this.data[idx] = null;
+                this.data![idx] = null;
             }
         }
 
         // Remove this
-        this.data[nextIdx] = null;
+        this.data![nextIdx] = null;
 
         // Possibly shift all the track data
-        while (this.data.length && this.data[0] === null) {
-            this.data.shift();
+        while (this.data!.length && this.data![0] === null) {
+            this.data!.shift();
             this.offset++;
         }
 
@@ -1265,7 +1277,7 @@ export class Peer {
         let tsOffset: number | null = null;
 
         // Helper function to get the ideal timestamp offset
-        const idealTSOffset = (chunk, delay) => {
+        const idealTSOffset = (chunk: IncomingData, delay: number) => {
             if (!chunk || chunk.remoteTimestamp < 0)
                 return;
             tsOffset = chunk.remoteTimestamp - performance.now() - delay;
@@ -1290,14 +1302,14 @@ export class Peer {
                     while (true) {
                         let lo = 0, hi = 0;
                         let hiChunk: IncomingData | null = null;
-                        for (const chunk of this.data) {
+                        for (const chunk of this.data!) {
                             if (!chunk || chunk.key || chunk.remoteTimestamp < 0)
                                 continue;
                             lo = chunk.remoteTimestamp;
                             break;
                         }
-                        for (let i = this.data.length - 1; i >= 0; i--) {
-                            const chunk = this.data[i];
+                        for (let i = this.data!.length - 1; i >= 0; i--) {
+                            const chunk = this.data![i];
                             if (!chunk || chunk.remoteTimestamp < 0)
                                 continue;
                             hi = chunk.remoteTimestamp;
@@ -1354,7 +1366,7 @@ export class Peer {
 
                 {
                     // Wait until we're actually supposed to be playing this chunk
-                    const wait = chunk.remoteTimestamp - tsOffset - performance.now();
+                    const wait = chunk.remoteTimestamp - tsOffset! - performance.now();
                     if (wait > 500) {
                         // Something is wrong with our offsets
                         idealTSOffset(chunk, 0);
@@ -1379,7 +1391,7 @@ export class Peer {
                     const track = this.tracks[chunk.trackIdx];
 
                     // We may have to wait
-                    const wait = chunk.remoteTimestamp - tsOffset - performance.now();
+                    const wait = chunk.remoteTimestamp - tsOffset! - performance.now();
 
                     // Play it
                     if (!track || chunk.track !== track) {
@@ -1651,25 +1663,19 @@ export class Peer {
      * A callback to resume reading the playback buffer.
      * @private
      */
-    resume: () => void | null;
+    resume: (() => void) | null;
 
     /**
      * The stream information.
      * @private
      */
-    stream: any[];
+    stream: any[] | null;
 
     /**
      * Incoming data.
      * @private
      */
-    data: IncomingData[];
-
-    /**
-     * Incoming data, sorted by track for easy selection.
-     * @private
-     */
-    dataByTrack: Record<number, IncomingData[]>;
+    data: (IncomingData | null)[] | null;
 
     /**
      * Offset of the data (i.e., index of the first packet).
@@ -1687,7 +1693,7 @@ export class Peer {
      * Each track's information.
      * @private
      */
-    tracks: Track[];
+    tracks: (Track | null)[] | null;
 
     /**
      * The (current) latency in playing audio data. Used to delay video
@@ -1699,7 +1705,7 @@ export class Peer {
      * The RTC connection to this peer.
      * @private
      */
-    rtc: RTCPeerConnection;
+    rtc: RTCPeerConnection | null;
 
     /**
      * Perfect negotiation: Are we making an offer?
@@ -1717,25 +1723,25 @@ export class Peer {
      * The reliable connection to this peer.
      * @private
      */
-    reliable: RTCDataChannel;
+    reliable: RTCDataChannel | null;
 
     /**
      * The semi-reliable connection (one retransmit) to this peer, only set if it's needed.
      * @private
      */
-    semireliable: RTCDataChannel;
+    semireliable: RTCDataChannel | null;
 
     /**
      * The unreliable connection to this peer.
      * @private
      */
-    unreliable: RTCDataChannel;
+    unreliable: RTCDataChannel | null;
 
     /**
      * Prober to probe unreliable connections, *if* we're currently in
      * *unreliable* mode, so can't use the actual data to probe.
      */
-    reliabilityProber: net.ReliabilityProber;
+    reliabilityProber: net.ReliabilityProber | null;
 
     /**
      * The current (measured) reliability of our OUTGOING connection. This gets
@@ -1754,23 +1760,13 @@ export class Peer {
      * Interval used to ping the reliable socket for timing info.
      * @private
      */
-    pingInterval: number;
+    pingInterval: number | null;
 
     /**
      * Pongs from the peer, in terms of microseconds RTT.
      * @private
      */
     pongs: number[];
-
-    /**
-     * Maximum buffer duration in milliseconds, based on ping-pong time.
-     */
-    private _maxBufferFromPingMs: number;
-
-    /**
-     * Maximum buffer duration in milliseconds, based on the actual data.
-     */
-    private _maxBufferFromDataMs: number;
 
     /**
      * Current actual buffer duration in milliseconds.
@@ -1797,7 +1793,7 @@ export class Peer {
     /**
      * A timeout to do outgoing acknowledgements.
      */
-    private _outAckTimeout: number | null;
+    private _outAckTimeout: number | null = null;
 
     /**
      * Acks of our own outgoing packets (i.e., incoming acks).
@@ -1876,13 +1872,13 @@ class Track {
      * Decoder for this track.
      * @private
      */
-    decoder: Decoder;
+    decoder: Decoder | null;
 
     /**
      * If needed, resampler for this track.
      * @private
      */
-    resampler: number[];
+    resampler: number[] | null;
 
     /**
      * Frame pointer, needed if we're using a resampler.
@@ -1894,7 +1890,7 @@ class Track {
      * Player for this track.
      * @private
      */
-    player: weasound.AudioPlayback | videoPlayback.VideoPlayback;
+    player: weasound.AudioPlayback | videoPlayback.VideoPlayback | null;
 }
 
 /**
@@ -1948,19 +1944,19 @@ class IncomingData {
      * The input encoded data, possibly split into parts.
      * @private
      */
-    encoded: Uint8Array[];
+    encoded: Uint8Array[] | null;
 
     /**
      * The actual displayable data.
      * @private
      */
-    decoded: Float32Array[] | wcp.VideoFrame | wcp.EncodedVideoChunk;
+    decoded: Float32Array[] | wcp.VideoFrame | wcp.EncodedVideoChunk | null;
 
     /**
      * The track used to decode this data.
      * @private
      */
-    track: Track;
+    track: Track | null;
 
     /**
      * The timestamp for this chunk, as specified by the sender.
@@ -1990,7 +1986,7 @@ class IncomingData {
      * And the function to call to resolve the above promise.
      * @private
      */
-    decodingRes: () => void;
+    decodingRes?: () => void;
 }
 
 /**
@@ -2014,15 +2010,15 @@ class Decoder {
      * @private
      */
     output(
-        dec: wcp.AudioDecoder | wcp.VideoDecoder,
-        data: wcp.AudioData | wcp.VideoFrame
+        dec: wcp.AudioDecoder | wcp.VideoDecoder | null,
+        data: wcp.AudioData | wcp.VideoFrame | null
     ) {
         if (this.decoder !== dec)
             return;
 
         this.buf.push(data);
         if (this.waiters.length)
-            this.waiters.shift()();
+            this.waiters.shift()!();
     }
 
     /**
@@ -2058,7 +2054,7 @@ class Decoder {
                 error: error => this.error(dec, error)
             });
         } else {
-            dec = new this.envA.AudioDecoder({
+            dec = new this.envA!.AudioDecoder({
                 output: data => this.output(dec, data),
                 error: error => this.error(dec, error)
             });
@@ -2070,7 +2066,7 @@ class Decoder {
             this.buf.push(null);
         }
         while (this.waiters.length)
-            this.waiters.shift()();
+            this.waiters.shift()!();
 
         // And set the new decoder
         this.keyChunkRequired = true;
@@ -2122,11 +2118,11 @@ class Decoder {
      */
     keyChunkRequired: boolean;
 
-    envA: wcp.AudioDecoderEnvironment;
-    envV: wcp.VideoDecoderEnvironment;
-    config: wcp.AudioDecoderConfig | wcp.VideoDecoderConfig;
-    decoder: wcp.AudioDecoder | wcp.VideoDecoder;
+    envA: wcp.AudioDecoderEnvironment | null;
+    envV: wcp.VideoDecoderEnvironment | null;
+    config: wcp.AudioDecoderConfig | wcp.VideoDecoderConfig | null;
+    decoder: wcp.AudioDecoder | wcp.VideoDecoder | null;
     waiters: (() => void)[];
-    buf: (wcp.AudioData | wcp.VideoFrame)[];
-        pts: number;
+    buf: (wcp.AudioData | wcp.VideoFrame | null)[];
+    pts: number;
 }

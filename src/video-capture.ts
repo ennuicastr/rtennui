@@ -155,15 +155,16 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
         // Get the framerate
         const settings = _ms.getVideoTracks()[0].getSettings();
-        this._framerate = settings.frameRate;
+        this._framerate = settings.frameRate!;
+        this._forceKeyframe = this._framerate * 2;
         // Get the initial width and height
         let width = _config.width;
         let height = _config.height;
 
         if (!width || !height) {
             // Set the width and height from the input
-            width = settings.width;
-            height = settings.height;
+            width = settings.width!;
+            height = settings.height!;
         }
 
         if (_config.codec === "vp8lo") {
@@ -177,6 +178,8 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
         this._width = _config.width = width;
         this._height = _config.height = height;
+
+        this._videoEncoder = null;
 
         // A single promise for synchronizing things
         this._p = Promise.all([]);
@@ -199,10 +202,10 @@ class VideoCaptureWebCodecs extends VideoCapture {
         }
 
         this._videoEncoder = new VideoEncoder({
-            output: x => this.onChunk(x),
-            error: x => this.onError(x)
+            output: (x: wcp.EncodedVideoChunk) => this.onChunk(x),
+            error: (x: any) => this.onError(x)
         });
-        await this._videoEncoder.configure(config);
+        await this._videoEncoder!.configure(config);
         this._forceKeyframe = this._framerate * 2;
     }
 
@@ -227,7 +230,7 @@ class VideoCaptureWebCodecs extends VideoCapture {
 
         // End the old video encoder
         try {
-            this._videoEncoder.close();
+            this._videoEncoder!.close();
         } catch (ex) {}
 
         // And start the new one
@@ -254,7 +257,7 @@ class VideoCaptureWebCodecs extends VideoCapture {
     }
 
     override close(): void {
-        this._videoEncoder.close();
+        this._videoEncoder!.close();
     }
 
     override getWidth(): number {
@@ -296,7 +299,7 @@ class VideoCaptureWebCodecs extends VideoCapture {
     private _framerate: number;
 
     // Video encoder
-    private _videoEncoder: wcp.VideoEncoder;
+    private _videoEncoder: wcp.VideoEncoder | null;
 
     // Shared promise
     private _p: Promise<unknown>;
@@ -346,14 +349,15 @@ class VideoCaptureWCMSTP extends VideoCaptureWebCodecs {
 class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
     constructor(ms: MediaStream, config: wcp.VideoEncoderConfig) {
         super(ms, config);
+        this._interval = 0;
 
         // The actual video stream in the source
         const settings = ms.getVideoTracks()[0].getSettings();
 
         // Create the <video> that will play the source
         const video = this._video = document.createElement("video");
-        video.width = settings.width;
-        video.height = settings.height;
+        video.width = settings.width!;
+        video.height = settings.height!;
         video.style.display = "none";
         video.defaultMuted = video.muted = true;
         video.srcObject = ms;
@@ -374,7 +378,7 @@ class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
 
         // Start our capture
         this._interval = setInterval(() => {
-            let frame: wcp.VideoFrame = null;
+            let frame: wcp.VideoFrame | null = null;
             try {
                 frame = new VideoFrame(video, {
                     timestamp: ts
@@ -393,7 +397,7 @@ class VideoCaptureWCVidEl extends VideoCaptureWebCodecs {
             this._video.pause();
         } catch (ex) {}
         try {
-            this._video.parentNode.removeChild(this._video);
+            this._video.parentNode!.removeChild(this._video);
         } catch (ex) {}
         super.close();
     }
@@ -429,8 +433,10 @@ class VideoCaptureMediaRecorder extends VideoCapture {
         // And bitrate
         this._bitrate = _config.bitrate || _config.height * 1000;
 
-        // Framerate isn't yet known
+        // Some things aren't known yet
+        this._mr = null;
         this._framerate = 0;
+        this._libav = null;
 
         // Global synchronization promise
         this._p = Promise.all([]);
@@ -479,37 +485,37 @@ class VideoCaptureMediaRecorder extends VideoCapture {
         // Read three frames to get the framerate
         {
             // First frame: just discarded as possibly non-representative
-            await libav.ff_read_multi(fmt_ctx, pkt, null, {
+            await libav.ff_read_multi(fmt_ctx, pkt, void 0, {
                 limit: 1,
                 unify: false
             });
 
             // Second frame: time ref one
             const [res1, packets1] =
-                await libav.ff_read_multi(fmt_ctx, pkt, null, {
+                await libav.ff_read_multi(fmt_ctx, pkt, void 0, {
                     limit: 1,
                     unify: false
                 });
 
             // Third frame: time ref two
             const [res2, packets2] =
-                await libav.ff_read_multi(fmt_ctx, pkt, null, {
+                await libav.ff_read_multi(fmt_ctx, pkt, void 0, {
                     limit: 1,
                     unify: false
                 });
 
             // Default is from the data
             this._framerate =
-                this._ms.getVideoTracks()[0].getSettings().frameRate;
+                this._ms.getVideoTracks()[0].getSettings().frameRate!;
             if (packets1 && packets1[stream.index] &&
                 packets2 && packets2[stream.index]) {
                 // Calculate our framerate
                 const packets =
                     packets1[stream.index].concat(packets2[stream.index]);
                 const pts1 =
-                    packets[0].pts * stream.time_base_num / stream.time_base_den;
+                    packets[0].pts! * stream.time_base_num / stream.time_base_den;
                 const pts2 =
-                    packets[1].pts * stream.time_base_num / stream.time_base_den;
+                    packets[1].pts! * stream.time_base_num / stream.time_base_den;
                 const fr = 1 / (pts2 - pts1);
                 if (fr && Number.isFinite(fr))
                     this._framerate = fr;
@@ -521,7 +527,7 @@ class VideoCaptureMediaRecorder extends VideoCapture {
             let beforeFirstKeyframe = true;
             while (true) {
                 const [res, packets] =
-                    await libav.ff_read_multi(fmt_ctx, pkt, null, {
+                    await libav.ff_read_multi(fmt_ctx, pkt, void 0, {
                         limit: 1,
                         unify: false
                     });
@@ -534,7 +540,7 @@ class VideoCaptureMediaRecorder extends VideoCapture {
                 if (packets[stream.index]) {
                     // Transit these packets
                     for (const packet of packets[stream.index]) {
-                        const key = !!(packet.flags & 1);
+                        const key = !!(packet.flags! & 1);
                         if (beforeFirstKeyframe) {
                             if (key)
                                 beforeFirstKeyframe = false;
@@ -564,17 +570,17 @@ class VideoCaptureMediaRecorder extends VideoCapture {
         const newConfig = Object.assign({}, this._config);
         const height = newConfig.height;
 
-        newConfig.bitrate *= enhancement;
-        if (newConfig.bitrate < 360 * 500) // lowest allowed bitrate
-            newConfig.bitrate = 360 * 500;
-        else if (newConfig.bitrate > height * 1000)
-            newConfig.bitrate = height * 1000;
+        newConfig.bitrate! *= enhancement;
+        if (newConfig.bitrate! < 360 * 500) // lowest allowed bitrate
+            newConfig.bitrate! = 360 * 500;
+        else if (newConfig.bitrate! > height * 1000)
+            newConfig.bitrate! = height * 1000;
         if (newConfig.bitrate === this._config.bitrate)
             return false;
 
         // OK, we changed the bitrate. Stop the old media recorder...
         try {
-            this._mr.stop();
+            this._mr!.stop();
         } catch (ex) {}
 
         // And make a new one
@@ -584,16 +590,16 @@ class VideoCaptureMediaRecorder extends VideoCapture {
     }
 
     override close(): void {
-        this._mr.stop();
+        this._mr!.stop();
         // libav will terminate itself
     }
 
     override getWidth(): number {
-        return this._ms.getVideoTracks()[0].getSettings().width;
+        return this._ms.getVideoTracks()[0].getSettings().width!;
     }
 
     override getHeight(): number {
-        return this._ms.getVideoTracks()[0].getSettings().height;
+        return this._ms.getVideoTracks()[0].getSettings().height!;
     }
 
     override getFramerate(): number {
@@ -611,10 +617,10 @@ class VideoCaptureMediaRecorder extends VideoCapture {
     private _bitrate: number;
 
     // The MediaRecorder instance
-    private _mr: MediaRecorder;
+    private _mr: MediaRecorder | null;
 
     // The LibAV instance
-    private _libav: libavT.LibAV;
+    private _libav: libavT.LibAV | null;
 
     // The framerate, detected from the data
     private _framerate: number;
@@ -631,7 +637,7 @@ export async function codecSupportList(): Promise<string[]> {
         return codecSupportArr;
 
     const cs = codecSupport;
-    const csl = codecSupportArr = [];
+    const csl: string[] = codecSupportArr = [];
 
     if (typeof VideoEncoder !== "undefined") {
         let cap = "wcvidel";
