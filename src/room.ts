@@ -427,7 +427,6 @@ export class Connection extends abstractRoom.AbstractRoom {
                     haveDC = !!this._serverUnreliableDC;
             }
 
-            // FIXME: Is this close never happening?
             this.emitEvent("server-secondary-disconnected", {
                 reliability: reliabilityStr
             });
