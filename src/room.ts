@@ -371,6 +371,7 @@ export class Connection extends abstractRoom.AbstractRoom {
 
         const pconn = new pingSocket.PingingSocket(conn);
 
+        let haveDC = false;
         let reliabilityStr = "unreliable";
         switch (reliability) {
             case net.Reliability.RELIABLE:
@@ -381,14 +382,58 @@ export class Connection extends abstractRoom.AbstractRoom {
             case net.Reliability.SEMIRELIABLE:
                 reliabilityStr = "semireliable";
                 this._serverSemireliableWS = pconn;
+                haveDC = !!this._serverSemireliableDC;
                 break;
 
             default: // unreliable
                 this._serverUnreliableWS = pconn;
+                haveDC = !!this._serverUnreliableDC;
+        }
+
+        if (haveDC) {
+            // Don't need both
+            pconn.close();
+            if (this._serverReliableWS === pconn)
+                this._serverReliableWS = null;
+            if (this._serverSemireliableWS === pconn)
+                this._serverSemireliableWS = null;
+            if (this._serverUnreliableWS === pcon)
+                this._serverUnreliableWS = null;
+            return;
         }
 
         this.emitEvent("server-secondary-connected", {
             reliability: reliabilityStr
+        });
+
+        conn.addEventListener("close", ev => {
+            let haveDC = false;
+            switch (reliability) {
+                case net.Reliability.RELIABLE:
+                    // No reliable DC
+                    if (this._serverReliableWS !== pconn)
+                        return;
+                    break;
+
+                case net.Reliability.SEMIRELIABLE:
+                    if (this._serverSemireliableWS !== pconn)
+                        return;
+                    haveDC = !!this._serverSemireliableDC;
+                    break;
+
+                default: // unreliable
+                    if (this._serverUnreliableWS !== pconn)
+                        return;
+                    haveDC = !!this._serverUnreliableDC;
+            }
+
+            // FIXME: Is this close never happening?
+            this.emitEvent("server-secondary-disconnected", {
+                reliability: reliabilityStr
+            });
+
+            if (!haveDC)
+                this._connectSecondWS(reliability);
         });
 
         conn.onmessage = ev => {
@@ -465,12 +510,21 @@ export class Connection extends abstractRoom.AbstractRoom {
         dc.addEventListener("open", () => {
             this._serverSemireliableDC = dc;
             this.emitEvent("server-semireliable-connected", {});
+
+            if (this._serverSemireliableWS) {
+                // Don't need both
+                this._serverSemireliableWS.close();
+            }
         }, {once: true});
 
         dc.addEventListener("close", () => {
             if (this._serverSemireliableDC === dc) {
                 this._serverSemireliableDC = null;
                 this.emitEvent("server-semireliable-disconnected", {});
+
+                if (!this._serverSemireliableWS)
+                    this._connectSecondWS(net.Reliability.SEMIRELIABLE);
+                this._connectSemireliableDC();
             }
         }, {once: true});
 
@@ -512,6 +566,11 @@ export class Connection extends abstractRoom.AbstractRoom {
             this.emitEvent("server-unreliable-connected", {
                 reliability: "reliable"
             });
+
+            if (this._serverUnreliableWS) {
+                // Don't need both
+                this._serverUnreliableWS.close();
+            }
         }, {once: true});
 
         dc.addEventListener("close", () => {
@@ -522,6 +581,10 @@ export class Connection extends abstractRoom.AbstractRoom {
                     this._serverReliabilityProber = null;
                 }
                 this.emitEvent("server-unreliable-disconnected", {});
+
+                if (!this._serverUnreliableWS)
+                    this._connectSecondWS(net.Reliability.UNRELIABLE);
+                this._connectUnreliableDC();
             }
         }, {once: true});
 
