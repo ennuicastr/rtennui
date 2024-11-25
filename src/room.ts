@@ -397,7 +397,7 @@ export class Connection extends abstractRoom.AbstractRoom {
                 this._serverReliableWS = null;
             if (this._serverSemireliableWS === pconn)
                 this._serverSemireliableWS = null;
-            if (this._serverUnreliableWS === pcon)
+            if (this._serverUnreliableWS === pconn)
                 this._serverUnreliableWS = null;
             return;
         }
