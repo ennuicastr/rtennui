@@ -223,13 +223,14 @@ export class ReliabilityProber {
 }
 
 /**
- * A description of a number entry.
+ * A description of a number entry: [location, size, value]. size === 0 means a
+ * netint.
  * @private
  */
-export type NumberDescr = [number, number, number];
+export type NumberDescr = [number, 0 | 1 | 2 | 4 | 8, number];
 
 /**
- * A description of a raw entry.
+ * A description of a raw entry: [location, bytes].
  * @private
  */
 export type RawDescr = [number, Uint8Array];

@@ -208,9 +208,10 @@ export class Peer {
                         if (this.unreliable && this.unreliable.socket === chan)
                             this.unreliable = null;
                     });
-                    this.unreliable = new pingingSocket.PingingSocket(
+                    const ps = this.unreliable = new pingingSocket.PingingSocket(
                         chan, pingTime, 1
                     );
+                    ps.onmessage = ev => this.onMessage(ev, chan, false);
                 }
             } catch (ex) {
                 // Unreliable connection failed, try again
@@ -228,9 +229,10 @@ export class Peer {
                         if (this.semireliable && this.semireliable.socket === chan)
                             this.semireliable = null;
                     });
-                    this.semireliable = new pingingSocket.PingingSocket(
+                    const ps = this.semireliable = new pingingSocket.PingingSocket(
                         chan, pingTime, 1
                     );
+                    ps.onmessage = ev => this.onMessage(ev, chan, false);
                 }
 
                 if (!this.reliable &&
@@ -241,9 +243,10 @@ export class Peer {
                         if (this.reliable && this.reliable.socket === chan)
                             this.reliable = null;
                     });
-                    this.reliable = new pingingSocket.PingingSocket(
+                    const ps = this.reliable = new pingingSocket.PingingSocket(
                         chan, pingTime, 1
                     );
+                    ps.onmessage = ev => this.onMessage(ev, chan, true);
                 }
 
             } catch (ex) {
@@ -445,6 +448,10 @@ export class Peer {
                 // Reverse to a pong
                 msg.setUint16(2, prot.ids.pong, true);
                 chan.send(msg.buffer);
+                break;
+
+            case prot.ids.pong:
+                this.recvPong(chan);
                 break;
         }
     }
@@ -860,6 +867,30 @@ export class Peer {
                 this.resume();
             else
                 this.play();
+        }
+    }
+
+    /**
+     * Receive a pong message. Really just used to report latency.
+     * @private
+     */
+    recvPong(chan: WebSocket | RTCDataChannel) {
+        let report: pingingSocket.PingingSocket | undefined;
+        for (const ps of [this.semireliable, this.unreliable, this.reliable]) {
+            if (!ps) continue;
+            if (chan === ps.socket) report = ps;
+            break;
+        }
+
+        if (report && typeof report.latency === "number") {
+            const network = Math.round(report.latency);
+            this.room.emitEvent("peer-p2p-latency", {
+                peer: this.id,
+                network,
+                buffer: this._currentBuffer,
+                playback: 50, // Just a guess
+                total: network + this._currentBuffer + 50
+            });
         }
     }
 

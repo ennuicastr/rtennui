@@ -69,8 +69,18 @@ export class PingingSocket {
         const msg = new DataView(ev.data);
         if (msg.byteLength >= 4) {
             const cmd = msg.getUint16(2, true);
-            if (cmd === prot.ids.pong)
+            if (cmd === prot.ids.pong) {
                 this._missedPongs = 0;
+                const p = prot.parts.pong;
+                if (msg.byteLength >= p.length) {
+                    const timestamp = msg.getFloat64(p.timestamp, true);
+                    const delay = performance.now() - timestamp;
+                    if (typeof this.latency === "undefined")
+                        this.latency = delay;
+                    else
+                        this.latency = this.latency*0.75 + delay*0.25;
+                }
+            }
         }
 
         this._resetInterval();
@@ -114,7 +124,7 @@ export class PingingSocket {
         const msg = net.createPacket(
             p.length, 65535,
             prot.ids.ping,
-            []
+            [[p.timestamp, 8, performance.now()]]
         );
         this.socket.send(msg);
     }
@@ -126,6 +136,11 @@ export class PingingSocket {
     onclose?: (ev: CloseEvent) => void;
     onerror?: (ev: Event) => void;
     onmissedpong?: (ct: number) => boolean | undefined;
+
+    /**
+     * Latency from pings, in milliseconds.
+     */
+    latency?: number;
 
     private _missedPongs = 0;
     private _interval: number | null;
