@@ -19,17 +19,20 @@ import * as net from "./net";
 import {protocol as prot} from "./protocol";
 
 const pingTime = 30000;
+const missedPongsLimit = 0;
 
 export class PingingSocket {
     constructor(
-        private _socket: WebSocket | RTCDataChannel
+        public socket: WebSocket | RTCDataChannel,
+        private _pingTime = pingTime,
+        private _missedPongsLimit = missedPongsLimit
     ) {
-        _socket.onmessage = this._onmessage.bind(this);
-        _socket.onclose = this._onclose.bind(this);
-        _socket.onerror = this._onerror.bind(this);
-        this.close = _socket.close.bind(_socket);
-        this.addEventListener = _socket.addEventListener.bind(_socket);
-        this.removeEventListener = _socket.removeEventListener.bind(_socket);
+        socket.onmessage = this._onmessage.bind(this);
+        socket.onclose = this._onclose.bind(this);
+        socket.onerror = this._onerror.bind(this);
+        this.close = socket.close.bind(socket);
+        this.addEventListener = socket.addEventListener.bind(socket);
+        this.removeEventListener = socket.removeEventListener.bind(socket);
         this._interval = null;
         this._resetInterval();
     }
@@ -38,15 +41,14 @@ export class PingingSocket {
      * Send this message on the socket.
      */
     send(msg: ArrayBuffer) {
-        this._resetInterval();
-        return this._socket.send(msg);
+        return this.socket.send(msg);
     }
 
     /**
      * Get the buffered amount (if possible).
      */
     bufferedAmount() {
-        return this._socket.bufferedAmount;
+        return this.socket.bufferedAmount;
     }
 
     /**
@@ -56,7 +58,7 @@ export class PingingSocket {
     private _resetInterval() {
         if (this._interval)
             clearInterval(this._interval);
-        this._interval = setInterval(this._ping.bind(this), pingTime);
+        this._interval = setInterval(this._ping.bind(this), this._pingTime);
     }
 
     /**
@@ -64,6 +66,13 @@ export class PingingSocket {
      * Receive a message.
      */
     private _onmessage(ev: MessageEvent) {
+        const msg = new DataView(ev.data);
+        if (msg.byteLength >= 4) {
+            const cmd = msg.getUint16(2, true);
+            if (cmd === prot.ids.pong)
+                this._missedPongs = 0;
+        }
+
         this._resetInterval();
         if (this.onmessage)
             this.onmessage(ev);
@@ -90,13 +99,24 @@ export class PingingSocket {
      * Perform a ping.
      */
     private _ping() {
+        if (this._missedPongs > this._missedPongsLimit) {
+            let close = true;
+            if (this.onmissedpong)
+                close = !this.onmissedpong(this._missedPongs);
+            if (close) {
+                this.close();
+                return;
+            }
+        }
+        this._missedPongs++;
+
         const p = prot.parts.ping;
         const msg = net.createPacket(
             p.length, 65535,
             prot.ids.ping,
             []
         );
-        this._socket.send(msg);
+        this.socket.send(msg);
     }
 
     close: () => void;
@@ -105,6 +125,8 @@ export class PingingSocket {
     onmessage?: (ev: MessageEvent) => void;
     onclose?: (ev: CloseEvent) => void;
     onerror?: (ev: Event) => void;
+    onmissedpong?: (ct: number) => boolean | undefined;
 
+    private _missedPongs = 0;
     private _interval: number | null;
 }

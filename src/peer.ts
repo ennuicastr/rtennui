@@ -19,6 +19,7 @@ import * as weasound from "weasound";
 
 import * as abstractRoom from "./abstract-room";
 import * as net from "./net";
+import * as pingingSocket from "./pinging-socket";
 import {protocol as prot} from "./protocol";
 import * as util from "./util";
 import * as videoPlayback from "./video-playback";
@@ -27,6 +28,11 @@ import type * as libavT from "libav.js";
 declare let LibAV: libavT.LibAVWrapper;
 import type * as wcp from "libavjs-webcodecs-polyfill";
 declare let LibAVWebCodecs: typeof wcp;
+
+/**
+ * Time between pinging peer channels.
+ */
+const pingTime = 1000;
 
 /**
  * The duration before forgetting a drop report.
@@ -61,6 +67,7 @@ export class Peer {
     ) {
         this.promise = Promise.all([]);
         this.p2pPromise = Promise.all([]);
+        this.p2pReconnectPending = false;
         this.closed = false;
         this.streamId = -1;
         this.playing = false;
@@ -118,11 +125,20 @@ export class Peer {
 
         // Force a complete reconnect if asked
         if (this.rtc && opts.forceCompleteReconnect) {
+            this.p2pReconnectPending = false;
+
             // Completely drop the old RTC instance and try again
             this.rtc.close();
             this.rtc = null;
+            this.reliable = this.semireliable = this.unreliable = null;
         }
 
+        if (this.p2pReconnectPending) {
+            await this.p2pPromise;
+            return;
+        }
+
+        this.p2pReconnectPending = true;
         this.p2pPromise = this.p2pPromise.then(async () => {
             // Create the RTCPeerConnection
             if (!this.rtc) {
@@ -185,13 +201,16 @@ export class Peer {
             // Outgoing data channels
             try {
                 if (!this.unreliable) {
-                    this.unreliable = await this.p2pChannel("unreliable", {
+                    const chan = await this.p2pChannel("unreliable", {
                         ordered: false,
                         maxRetransmits: 0
                     }, chan => {
-                        if (this.unreliable === chan)
+                        if (this.unreliable && this.unreliable.socket === chan)
                             this.unreliable = null;
                     });
+                    this.unreliable = new pingingSocket.PingingSocket(
+                        chan, pingTime, 1
+                    );
                 }
             } catch (ex) {
                 // Unreliable connection failed, try again
@@ -202,23 +221,29 @@ export class Peer {
             try {
                 if (!this.semireliable &&
                     this.reliability > net.Reliability.UNRELIABLE) {
-                    this.semireliable = await this.p2pChannel("semireliable", {
+                    const chan = await this.p2pChannel("semireliable", {
                         ordered: false,
                         maxRetransmits: 1
                     }, chan => {
-                        if (this.semireliable === chan)
+                        if (this.semireliable && this.semireliable.socket === chan)
                             this.semireliable = null;
                     });
+                    this.semireliable = new pingingSocket.PingingSocket(
+                        chan, pingTime, 1
+                    );
                 }
 
                 if (!this.reliable &&
                     this.reliability > net.Reliability.UNRELIABLE) {
-                    this.reliable = await this.p2pChannel("reliable", {
+                    const chan = await this.p2pChannel("reliable", {
                         ordered: false
                     }, chan => {
-                        if (this.reliable === chan)
+                        if (this.reliable && this.reliable.socket === chan)
                             this.reliable = null;
                     });
+                    this.reliable = new pingingSocket.PingingSocket(
+                        chan, pingTime, 1
+                    );
                 }
 
             } catch (ex) {
@@ -242,9 +267,12 @@ export class Peer {
                 this.room._sendServer(msg);
             }
 
-        }).catch(console.error);
+        }).catch(console.error).then(async () => {
+            this.p2pReconnectPending = false;
 
-        await this.promise;
+        });
+
+        await this.p2pPromise;
     }
 
     /**
@@ -411,6 +439,12 @@ export class Peer {
 
             case prot.ids.data:
                 this.recvData(msg);
+                break;
+
+            case prot.ids.ping:
+                // Reverse to a pong
+                msg.setUint16(2, prot.ids.pong, true);
+                chan.send(msg.buffer);
                 break;
         }
     }
@@ -1410,6 +1444,8 @@ export class Peer {
 
         // If it's high, do something
         if (dropRate >= 1/16) {
+            this._inAcksGood = 0;
+
             // Our drop rate to this peer is high. Mark it.
             this.outgoingDrops = true;
             if (this.outgoingDropsTimeout)
@@ -1437,8 +1473,7 @@ export class Peer {
                 case net.Reliability.RELIABLE:
                     // Use a semi-reliable connection
                     this.reliability = net.Reliability.SEMIRELIABLE;
-                    if (!this.semireliable)
-                        this.p2p();
+                    this.p2p();
                     break;
 
                 case net.Reliability.UNRELIABLE:
@@ -1460,6 +1495,18 @@ export class Peer {
                     this.p2p({forceCompleteReconnect});
                     break;
             }
+
+        } else if (dropRate === 0) {
+            this._inAcksGood++;
+            if (this._inAcksGood >= 3) {
+                // Can probably bump our reliability
+                this._inAcksGood = 0;
+                if (this.reliability < net.Reliability.RELIABLE) {
+                    this.reliability++;
+                    this.p2p();
+                }
+            }
+
         }
     }
 
@@ -1475,6 +1522,13 @@ export class Peer {
      * @private
      */
     p2pPromise: Promise<unknown>;
+
+    /**
+     * Set if a P2P reconnect is pending, to avoid simultaneously attempting
+     * multiple reconnections.
+     * @private
+     */
+    p2pReconnectPending: boolean;
 
     /**
      * Set when this peer has been disconnected, so no reconnects should be
@@ -1558,25 +1612,19 @@ export class Peer {
      * The reliable connection to this peer.
      * @private
      */
-    reliable: RTCDataChannel | null;
+    reliable: pingingSocket.PingingSocket | null;
 
     /**
      * The semi-reliable connection (one retransmit) to this peer, only set if it's needed.
      * @private
      */
-    semireliable: RTCDataChannel | null;
+    semireliable: pingingSocket.PingingSocket | null;
 
     /**
      * The unreliable connection to this peer.
      * @private
      */
-    unreliable: RTCDataChannel | null;
-
-    /**
-     * Prober to probe unreliable connections, *if* we're currently in
-     * *unreliable* mode, so can't use the actual data to probe.
-     */
-    reliabilityProber: net.ReliabilityProber | null;
+    unreliable: pingingSocket.PingingSocket | null;
 
     /**
      * The current (measured) reliability of our OUTGOING connection. This gets
@@ -1632,6 +1680,11 @@ export class Peer {
      * The interval for checking acknowlegements.
      */
     private _inAckInterval: number | null;
+
+    /**
+     * How many in ack checks since we've had drops.
+     */
+    private _inAcksGood = 0;
 
     /**
      * Set when our outgoing drop rate is high.
