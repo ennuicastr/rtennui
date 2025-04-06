@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021-2024 Yahweasel
+ * Copyright (c) 2021-2025 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -44,12 +44,6 @@ export async function load() {
 }
 
 /**
- * Ideal number of pings before reporting buffering.
- * @private
- */
-const idealPings = 5;
-
-/**
  * A single peer.
  * @private
  */
@@ -82,13 +76,9 @@ export class Peer {
         this.rtcMakingOffer = false;
         this.rtcIgnoreOffer = false;
         this.reliable = this.semireliable = this.unreliable = null;
-        this.reliabilityProber = null;
         this.reliability = net.Reliability.SEMIRELIABLE;
         this.lastReliableRelayTime = 0;
-        this.pingInterval = null;
-        this.pongs = [];
         this._currentBuffer = 0;
-        this._incomingReliable = 0;
 
         this.newOutgoingStream();
         this._inAckInterval = setInterval(() => this._checkInAcks(), 1000);
@@ -185,19 +175,10 @@ export class Peer {
                 peer.ondatachannel = ev => {
                     const chan = ev.channel;
                     chan.binaryType = "arraybuffer";
-                    if (chan.label === "reliable") {
+                    if (chan.label === "reliable")
                         chan.onmessage = ev => this.onMessage(ev, chan, true);
-
-                        chan.onclose = () => this._incomingReliable--;
-                        this._incomingReliable++;
-
-                        // Possibly set up pings
-                        this.ping();
-
-                    } else {
+                    else
                         chan.onmessage = ev => this.onMessage(ev, chan, false);
-
-                    }
                 };
             }
 
@@ -216,31 +197,6 @@ export class Peer {
                 // Unreliable connection failed, try again
                 this.p2p({forceCompleteReconnect: true});
                 return;
-            }
-
-            // Once we have an unreliable connection, we can probe reliability
-            if (this.unreliable &&
-                this.reliability !== net.Reliability.RELIABLE) {
-                /* In reliable mode, we'll discover the reliability from the
-                 * data. Otherwise, we'll need to probe. */
-                if (this.reliabilityProber)
-                    this.reliabilityProber.stop();
-                const rp = this.reliabilityProber = new net.ReliabilityProber(
-                    this.unreliable, true,
-                    (reliability: net.Reliability) => {
-                        if (this.reliabilityProber === rp &&
-                            reliability > this.reliability) {
-                            if (this.reliability < net.Reliability.RELIABLE)
-                                this.reliability++;
-                            this.reliabilityProber.stop();
-                            this.reliabilityProber = null;
-                            this.p2p();
-                        }
-                    }
-                );
-            } else if (this.reliabilityProber) {
-                this.reliabilityProber.stop();
-                this.reliabilityProber = null;
             }
 
             try {
@@ -263,10 +219,6 @@ export class Peer {
                         if (this.reliable === chan)
                             this.reliable = null;
                     });
-
-
-                    // Pings are only done on the reliable channel
-                    this.ping();
                 }
 
             } catch (ex) {
@@ -453,43 +405,6 @@ export class Peer {
                 this.recvAck(msg);
                 break;
 
-            case prot.ids.ping:
-                // Just reverse it into a pong
-                if (!this.reliable)
-                    return;
-                msg.setUint16(0, this.room._getOwnId(), true);
-                msg.setUint16(2, prot.ids.pong, true);
-                try {
-                    this.reliable.send(msg.buffer);
-                } catch (ex) {
-                    // Retry *once*
-                    setTimeout(() => {
-                        try {
-                            this.reliable!.send(msg.buffer);
-                        } catch (ex) {
-                            console.error(ex);
-                        }
-                    }, 1000);
-                }
-                break;
-
-            case prot.ids.rping:
-                // Reliability ping. Just reverse it into a pong.
-                msg.setUint16(0, this.room._getOwnId(), true);
-                msg.setUint16(2, prot.ids.rpong, true);
-                try {
-                    chan.send(msg.buffer);
-                } catch (ex) {
-                    /* This is exactly the kind of reliability issues we
-                     * *should* be dropping for. */
-                    console.error(ex);
-                }
-                break;
-
-            case prot.ids.pong:
-                this.pong(msg.getFloat64(prot.parts.pong.timestamp, true));
-                break;
-
             case prot.ids.info:
                 this.recvInfo(msg);
                 break;
@@ -498,90 +413,6 @@ export class Peer {
                 this.recvData(msg);
                 break;
         }
-    }
-
-    /**
-     * Possibly set up pings to this user.
-     * @private
-     */
-    ping() {
-        if (this.pingInterval || !this.reliable || !this._incomingReliable)
-            return;
-
-        if (this.pongs.length >= idealPings) {
-            // Ping at a leisurely pace
-            this.pingInterval = setInterval(() => {
-                this.sendPing();
-            }, 30000);
-
-        } else {
-            // Ping once and move from there
-            this.sendPing();
-
-        }
-    }
-
-    /**
-     * Send a single ping.
-     * @private
-     */
-    sendPing() {
-        if (!this.reliable || !this._incomingReliable) {
-            // Nowhere to ping!
-            return;
-        }
-
-        // Create the packet and send it
-        const p = prot.parts.ping;
-        const msg = net.createPacket(
-            p.length, this.room._getOwnId(), prot.ids.ping,
-            [[p.timestamp, 8, performance.now()]]
-        );
-        try {
-            this.reliable.send(msg);
-        } catch (ex) {
-            // Retry *once*
-            setTimeout(() => {
-                try {
-                    this.reliable!.send(msg);
-                } catch (ex) {
-                    console.error(ex);
-                }
-            }, 1000);
-        }
-    }
-
-    /**
-     * Handler for receiving a pong.
-     * @private
-     * @param timestamp  Timestamp of the original ping.
-     */
-    pong(timestamp: number) {
-        // Add the RTT to the list
-        const pongs = this.pongs;
-        pongs.push(performance.now() - timestamp);
-        while (pongs.length > idealPings)
-            pongs.shift();
-
-        // Inform the user
-        this.room.emitEvent("peer-p2p-latency", {
-            peer: this.id,
-            network: Math.round(pongs[pongs.length-1]),
-            buffer: this._currentBuffer,
-            playback: 50, // Just a guess
-            total: Math.round(
-                // The actual network latency...
-                pongs[pongs.length-1] +
-
-                // Our buffer
-                this._currentBuffer +
-
-                // The playback delay (final buffer)
-                50
-            )
-        });
-
-        this.ping();
     }
 
     /**
@@ -1196,7 +1027,7 @@ export class Peer {
         /// Forcibly allow dropping of keyframes
         key?: boolean
     } = {}) {
-        const blocked: Record<number, boolean> = {};
+        const needKey: Record<number, boolean> = {};
         let nextIdx = 0;
         let next: IncomingData | null = null;
         let complete = false;
@@ -1204,7 +1035,11 @@ export class Peer {
             next = this.data![nextIdx];
             if (!next)
                 continue;
-            if (blocked[next.trackIdx])
+
+            // If this *is* a keyframe, unblock
+            if (next.key)
+                delete needKey[next.trackIdx];
+            if (needKey[next.trackIdx])
                 continue;
 
             // next is set, but might be incomplete
@@ -1223,7 +1058,7 @@ export class Peer {
                 if (next.key) {
                     if (!opts.incomplete) {
                         // Ignore this track
-                        blocked[next.trackIdx] = true;
+                        needKey[next.trackIdx] = true;
                         continue;
                     } else if (!opts.key) {
                         // Don't skip this keyframe
@@ -1757,28 +1592,9 @@ export class Peer {
     lastReliableRelayTime: number;
 
     /**
-     * Interval used to ping the reliable socket for timing info.
-     * @private
-     */
-    pingInterval: number | null;
-
-    /**
-     * Pongs from the peer, in terms of microseconds RTT.
-     * @private
-     */
-    pongs: number[];
-
-    /**
      * Current actual buffer duration in milliseconds.
      */
     private _currentBuffer: number;
-
-    /**
-     * Number of incoming reliable streams. A number instead of a boolean so
-     * that events can be reordered and we still know whether we have a
-     * connection.
-     */
-    private _incomingReliable: number;
 
     /**
      * Acks of their incoming packets (i.e., outgoing acks).
