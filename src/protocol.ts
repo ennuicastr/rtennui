@@ -39,7 +39,8 @@ export const protocol = {
 
         // Actual streaming data, sent via multiple channels
         data: 0x30,
-        relay: 0x31
+        relay: 0x31,
+        ctcp: 0x32
     },
 
     parts: {
@@ -201,6 +202,15 @@ export const protocol = {
              *               relay to that target.
              * data: A complete data packet.
              */
+        },
+
+        /* ctcp:
+         * c->c: Client-to-client arbitrary data. Any JSON object can be
+         *       communicated.
+         */
+        ctcp: {
+            length: 4, // + data
+            data: 4
         }
     }
 };

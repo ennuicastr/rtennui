@@ -444,6 +444,10 @@ export class Peer {
                 this.recvData(msg);
                 break;
 
+            case prot.ids.ctcp:
+                this.recvCTCP(msg);
+                break;
+
             case prot.ids.ping:
                 // Reverse to a pong
                 msg.setUint16(2, prot.ids.pong, true);
@@ -867,6 +871,34 @@ export class Peer {
                 this.resume();
             else
                 this.play();
+        }
+    }
+
+    /**
+     * Called when a CTCP message is received. Really just creates an event.
+     * @private
+     * @param msg  The CTCP message.
+     */
+    async recvCTCP(msg: DataView) {
+        const p = prot.parts.ctcp;
+        if (msg.byteLength < p.length)
+            return;
+
+        try {
+            // Get out the message
+            const msgU8 = new Uint8Array(
+                msg.buffer,
+                msg.byteOffset + p.data,
+                msg.byteLength - p.data
+            );
+            const data = JSON.parse(await util.decodeText(msgU8));
+
+            this.room.emitEvent("ctcp", {
+                peer: this.id,
+                data
+            });
+        } catch (ex) {
+            console.error("Bad CTCP message", ex);
         }
     }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 /*
- * Copyright (c) 2021-2024 Yahweasel
+ * Copyright (c) 2021-2025 Yahweasel
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -71,6 +71,10 @@ const perPacket = 61440;
  *       peer: number, id: number, playback: AudioPlayback
  *   }):
  *   Audio track ended.
+ * * ctcp({
+ *       peer: number, data: any
+ *   }):
+ *   Client-to-client message.
  */
 export class Connection extends abstractRoom.AbstractRoom {
     constructor(
@@ -1289,6 +1293,56 @@ export class Connection extends abstractRoom.AbstractRoom {
                 ret = true;
         }
         return ret;
+    }
+
+    /**
+     * Send a message via CTCP to a given client.
+     * @param target  An array of targets, OR a single target ID number, OR
+     *                null to broadcast.
+     * @param data  Data to send, must be JSON-able.
+     */
+    ctcp(targetsIn: number[] | number | null, data: any) {
+        let targets: number[];
+        if (targetsIn === null) {
+            targets = this._peers.map((_, idx) => idx);
+        } else if (typeof targetsIn === "number") {
+            targets = [targetsIn];
+        } else {
+            targets = targetsIn;
+        }
+
+        // Make the CTCP message
+        const p = prot.parts.ctcp;
+        const dataU8 = util.encodeText(JSON.stringify(data));
+        const msg = net.createPacket(
+            p.length + data.length,
+            this._id, prot.ids.ctcp,
+            [[p.data, data]]
+        );
+
+        let needRelay: number[] = [];
+
+        // Send directly where possible
+        for (const peerIdx of targets) {
+            const peer = this._peers[peerIdx];
+            if (!peer)
+                continue;
+            let peerRelay = false;
+
+            try {
+                peer.reliable!.send(msg);
+            } catch (ex) {
+                peerRelay = true;
+            }
+
+            // If we need to relay, set it
+            if (peerRelay)
+                needRelay.push(peerIdx);
+        }
+
+        // Relay if needed
+        if (needRelay.length)
+            this._relayMessage(msg, needRelay);
     }
 
     // AbstractRoom methods
