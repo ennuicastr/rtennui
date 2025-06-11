@@ -951,10 +951,8 @@ export class Connection extends abstractRoom.AbstractRoom {
                          * unreliably, even if there's little hope of it going
                          * through */
                         if (peer.unreliable) {
-                            try {
-                                peer.unreliable.send(buf);
-                                break;
-                            } catch (ex) {}
+                            peer.unreliable.send(buf);
+                            break;
                         }
                         // Intentional fallthrough
 
@@ -962,19 +960,15 @@ export class Connection extends abstractRoom.AbstractRoom {
                         // Bump up semireliable to reliable if needed
                         if (peer.reliability >= net.Reliability.SEMIRELIABLE &&
                             peer.semireliable) {
-                            try {
-                                peer.semireliable.send(buf);
-                                break;
-                            } catch (ex) {}
+                            peer.semireliable.send(buf);
+                            break;
                         }
                         // Intentional fallthrough
 
                     case net.Reliability.RELIABLE:
                         if (peer.reliable) {
-                            try {
-                                peer.reliable.send(buf);
-                                break;
-                            } catch (ex) {}
+                            peer.reliable.send(buf);
+                            break;
                         }
                         // Intentional fallthrough
 

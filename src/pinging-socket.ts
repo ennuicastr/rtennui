@@ -41,7 +41,12 @@ export class PingingSocket {
      * Send this message on the socket.
      */
     send(msg: ArrayBuffer) {
-        return this.socket.send(msg);
+        try {
+            this.socket.send(msg);
+        } catch (ex) {
+            this.socket.close();
+            throw ex;
+        }
     }
 
     /**
