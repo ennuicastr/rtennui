@@ -1040,39 +1040,64 @@ export class Connection extends abstractRoom.AbstractRoom {
          * reliable connection if the data is reliable, of course. */
         switch (reliability) {
             case net.Reliability.RELIABLE:
-                if (this._serverReliableWS)
-                    this._serverReliableWS.send(relayMsg.buffer);
-                else
-                    this._serverControl!.send(relayMsg.buffer);
+                this._sendAnySock(
+                    [this._serverReliableWS, this._serverControl],
+                    relayMsg.buffer
+                );
                 break;
 
             case net.Reliability.SEMIRELIABLE:
-                if (this._serverSemireliableDC) {
-                    try {
-                        this._serverSemireliableDC.send(relayMsg.buffer);
-                    } catch (ex) {}
-                } else {
-                    const target =
-                        this._serverSemireliableWS || this._serverControl!;
-                    if (target.bufferedAmount() <= 8192)
-                        target.send(relayMsg.buffer);
-                }
+                this._sendAnySock(
+                    [
+                        this._serverSemireliableDC, this._serverSemireliableWS,
+                        this._serverControl
+                    ],
+                    relayMsg.buffer, 8192
+                );
                 break;
 
             default: // unreliable
-            {
-                const rtcTarget =
-                    this._serverUnreliableDC || this._serverSemireliableDC;
-                if (rtcTarget) {
-                    try {
-                        rtcTarget.send(relayMsg.buffer);
-                    } catch (ex) {}
-                } else {
-                    const target =
-                        this._serverUnreliableWS || this._serverControl!;
-                    if (target.bufferedAmount() <= 1024)
-                        target.send(relayMsg.buffer);
-                }
+                this._sendAnySock(
+                    [
+                        this._serverUnreliableDC, this._serverUnreliableWS,
+                        this._serverControl
+                    ],
+                    relayMsg.buffer, 1024
+                );
+        }
+    }
+
+    /**
+     * Send this data via one of a collection of possible sockets.
+     * @param socks  Sockets to send it to
+     * @param buf  Buffer to send
+     * @param limit  Only send if the buffered amount on the socket is less than
+     *               this
+     */
+    private _sendAnySock(
+        socks: (pingSocket.PingingSocket | RTCDataChannel | null)[],
+        buf: ArrayBuffer,
+        limit = -1
+    ) {
+        for (let si = 0; si < socks.length; si++) {
+            const sock = socks[si];
+            if (!sock) continue;
+            if (limit >= 0 && si > 0) {
+                let ba = 0;
+                if (typeof sock.bufferedAmount === "function")
+                    ba = sock.bufferedAmount();
+                else
+                    ba = sock.bufferedAmount;
+                if (ba >= limit)
+                    continue;
+            }
+            if (si < socks.length - 1) {
+                try {
+                    sock.send(buf);
+                    break;
+                } catch (ex) {}
+            } else {
+                sock.send(buf);
             }
         }
     }

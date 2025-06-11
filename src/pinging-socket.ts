@@ -126,7 +126,11 @@ export class PingingSocket {
             prot.ids.ping,
             [[p.timestamp, 8, performance.now()]]
         );
-        this.socket.send(msg);
+        try {
+            this.socket.send(msg);
+        } catch (ex) {
+            this.socket.close();
+        }
     }
 
     close: () => void;
