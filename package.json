@@ -4,6 +4,13 @@
   "description": "A portable replacement for WebRTC's media component",
   "main": "dist/rtennui.js",
   "types": "src/main.ts",
+  "exports": {
+    ".": {
+      "module": "./dist/rtennui.mjs",
+      "types": "./src/main.ts",
+      "default": "./dist/rtennui.js"
+    }
+  },
   "scripts": {
     "build": "rollup -c",
     "test": "echo \"Error: no test specified\" && exit 1"
